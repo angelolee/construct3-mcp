@@ -214,7 +214,7 @@ describe('add_event_block', () => {
     expect(data.generatedSid).toBeDefined();
   });
 
-  it('rejects block without conditions', async () => {
+  it('allows an unconditional block', async () => {
     const { server } = setup({
       eventSheets: new Map([['MainSheet', { name: 'MainSheet', events: [], sid: 10 }]]),
     });
@@ -223,8 +223,8 @@ describe('add_event_block', () => {
       conditions: [],
       actions: [],
     });
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('At least one condition');
+    expect(result.isError).not.toBe(true);
+
   });
 
   it('allows else block without conditions', async () => {
@@ -1437,5 +1437,33 @@ describe('update_event_variable', () => {
     });
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain('No updates');
+  });
+});
+
+describe('canonical event tool inputs', () => {
+  it('accepts canonical behavior and OR fields when creating a block', async () => {
+    const { server, writer } = setup({ objects: new Map([['Player', { name: 'Player', 'plugin-id': 'Sprite', behaviorTypes: [{ behaviorId: 'EightDir', name: '8Direction' }] }]]), eventSheets: new Map([['Main', { name: 'Main', events: [], sid: 1 }]]) });
+    const result = await server.callTool('add_event_block', { sheetName: 'Main', isOrBlock: true, conditions: [{ id: 'is-moving', objectClass: 'Player', behaviorType: '8Direction' }] });
+    expect(result.isError).not.toBe(true);
+    const block = (writer.callsFor('writeEntityFile')[0].args[2] as any).events[0];
+    expect(block.isOrBlock).toBe(true);
+    expect(block.conditions[0].behaviorType).toBe('8Direction');
+  });
+
+  it('uses canonical behavior fields for conditions and actions added to an existing block', async () => {
+    const { server, writer } = setup({ objects: new Map([['Player', { name: 'Player', 'plugin-id': 'Sprite', behaviorTypes: [{ behaviorId: 'EightDir', name: '8Direction' }] }]]), eventSheets: new Map([['Main', { name: 'Main', events: [{ eventType: 'block', sid: 10, conditions: [], actions: [] }], sid: 1 }]]) });
+    const result = await server.callTool('update_event_block', { sheetName: 'Main', sid: 10, isOrBlock: true, addConditions: [{ id: 'is-moving', objectClass: 'Player', 'behavior-type': '8Direction' }], addActions: [{ id: 'set-speed', objectClass: 'Player', 'behavior-type': '8Direction', parameters: { speed: '100' } }] });
+    expect(result.isError).not.toBe(true);
+    const block = (writer.callsFor('writeEntityFile')[0].args[2] as any).events[0];
+    expect(block.conditions[0].behaviorType).toBe('8Direction');
+    expect(block.actions[0].behaviorType).toBe('8Direction');
+    expect(block.isOrBlock).toBe(true);
+  });
+
+  it('creates a block without conditions through the MCP handler', async () => {
+    const { server, writer } = setup({ eventSheets: new Map([['Main', { name: 'Main', events: [], sid: 1 }]]) });
+    const result = await server.callTool('add_event_block', { sheetName: 'Main', actions: [{ id: 'set-eventvar-value', objectClass: 'System' }] });
+    expect(result.isError).not.toBe(true);
+    expect(writer.callsFor('writeEntityFile')).toHaveLength(1);
   });
 });

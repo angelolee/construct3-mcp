@@ -8,6 +8,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Construct3ProjectReader } from '../construct3/project-reader.js';
 import type { Construct3ProjectWriter } from '../construct3/project-writer.js';
 import type { IdGenerator } from '../construct3/id-generator.js';
+import type { KnowledgeBase } from '../knowledge/base.js';
 import { RESERVED_NAMES } from '../construct3/templates.js';
 
 /** Dependency bundle passed to each domain's registerXTools() function. */
@@ -16,6 +17,7 @@ export interface MutationToolDeps {
   reader: Construct3ProjectReader;
   writer: Construct3ProjectWriter;
   idGen: IdGenerator;
+  knowledge?: KnowledgeBase;
 }
 
 /** Validate that a name is safe for use as a filename and C3 identifier. */

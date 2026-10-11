@@ -179,6 +179,7 @@ Detailed documentation is available in the `/docs` folder:
 - [**Examples**](docs/EXAMPLES.md) - Usage examples and workflows
 - [**Development Guide**](docs/DEVELOPMENT.md) - Contributing, adding tools, C3 format notes
 - [**Troubleshooting**](docs/TROUBLESHOOTING.md) - Common issues and solutions
+- [**Construct 3 Knowledge Base**](../Construct3-Knowledge/README.md) - Local research, example inventory, compatibility findings, and guidance for AI agents
 
 ## Installation
 
@@ -466,3 +467,12 @@ MIT License - see [LICENSE](LICENSE) file for details
 **Made with care for the Construct 3 community**
 
 [Back to top](#construct3-mcp-server)
+
+
+### Optional local knowledge and project bootstrap
+
+Set `C3_KNOWLEDGE_PATH` to the Construct3-Knowledge directory and optionally `C3_KNOWLEDGE_PYTHON` to a Python 3 executable with SQLite/FTS5 support. This enables `search_construct_docs`, `search_construct_examples`, `get_ace_contract`, configured pre-write event checks, and `create_project_from_template`. Retrieved contracts are versioned evidence; unsupported or unavailable coverage is explicit.
+
+With knowledge configured, starting without a project argument in a directory containing no `.c3proj` exposes knowledge/bootstrap tools. Copy an indexed original using `exampleSlug` and `destinationName`; the result lives under `created-projects/<name>/project/`. Start a fresh MCP connection with its returned `projectPath` for inspection, mutation and packing. The original connection stays bound to its previous project. Existing destinations and source drift are rejected.
+
+See [knowledge integration](../Construct3-Knowledge/knowledge-integration.md) and [bootstrap acceptance](../Construct3-Knowledge/bootstrap-evaluation.md) for configuration, evidence, rollback and runtime limitations. Restart an already connected server to load the new modules and tool catalog.

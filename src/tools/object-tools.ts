@@ -41,7 +41,7 @@ export function registerObjectTools({ server, reader, writer, idGen }: MutationT
 
         // Check uniqueness
         const existing = await reader.listObjectTypes();
-        if (existing.includes(args.name)) {
+        if (existing.some(name => name.toLowerCase() === args.name.toLowerCase())) {
           return toolError(`Object "${args.name}" already exists. Use update_object_properties to modify it.`);
         }
 
@@ -340,7 +340,7 @@ export function registerObjectTools({ server, reader, writer, idGen }: MutationT
 
         // Check uniqueness
         const existing = await reader.listFamilies();
-        if (existing.includes(args.name)) {
+        if (existing.some(name => name.toLowerCase() === args.name.toLowerCase())) {
           return toolError(`Family "${args.name}" already exists.`);
         }
 

@@ -152,7 +152,7 @@ export class ProjectIndex {
         const funcPath = path ? `${path} > function:${funcName}` : `function:${funcName}`;
 
         // Record function definition
-        const paramNames = func.parameters?.map(p => p.name) || [];
+        const paramNames = (func.functionParameters ?? func.parameters)?.map(p => p.name) || [];
         this.functionDefinitions.set(funcName, { sheet: sheetName, params: paramNames });
 
         // Index conditions & actions

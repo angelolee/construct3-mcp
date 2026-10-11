@@ -41,6 +41,16 @@ function validProject() {
 }
 
 describe('validateProjectIntegrity', () => {
+  it('does not mistake the built-in Functions namespace for a missing object', async () => {
+    const reader = createReader({
+      eventSheets: new Map([['Calls', { name: 'Calls', sid: 100, events: [
+        { eventType: 'function-block', functionName: 'Reset', sid: 101, conditions: [], actions: [], children: [] },
+        { eventType: 'block', sid: 102, conditions: [], actions: [{ objectClass: 'Functions', callFunction: 'Reset', sid: 103 }] },
+      ] }]]),
+    });
+    const result = await validateProjectIntegrity(reader);
+    expect(result.warnings.filter(w => w.check === 'broken-object-reference')).toEqual([]);
+  });
   beforeEach(() => {
     resetProjectIndex();
   });
@@ -433,12 +443,12 @@ describe('validateProjectIntegrity', () => {
 
   it('detects subfolder missing name field', async () => {
     const reader = validProject();
-    // Patch the project to add a nameless subfolder in timelines
+    // Ordinary folders still require names.
     const origGetProject = reader.getProject.bind(reader);
     reader.getProject = () => {
       const proj = origGetProject();
-      proj.timelines = {
-        items: ['Timeline1'],
+      proj.objectTypes = {
+        items: ['Player'],
         subfolders: [{ items: ['T2'], subfolders: [] }], // no name!
       };
       return proj;
@@ -509,5 +519,31 @@ describe('validateProjectIntegrity', () => {
     const result = await validateProjectIntegrity(reader);
     const orphanInfo = result.info.find(i => i.check === 'orphaned-object' && i.entity.includes('UnusedSprite'));
     expect(orphanInfo).toBeDefined();
+  });
+});
+
+describe('official container compatibility', () => {
+  it('accepts the nameless first timelines root wrapper', async () => {
+    const reader = validProject();
+    const original = reader.getProject.bind(reader);
+    reader.getProject = () => ({ ...original(), timelines: { items: [], subfolders: [{ items: [], subfolders: [] }] } }) as any;
+    const result = await validateProjectIntegrity(reader);
+    expect(result.errors.filter(e => e.check === 'subfolder-structure')).toEqual([]);
+  });
+
+  it('still rejects nameless folders nested inside the timelines root wrapper', async () => {
+    const reader = validProject();
+    const original = reader.getProject.bind(reader);
+    reader.getProject = () => ({ ...original(), timelines: { items: [], subfolders: [{ items: [], subfolders: [{ items: [], subfolders: [] }] }] } }) as any;
+    const result = await validateProjectIntegrity(reader);
+    expect(result.errors.filter(e => e.check === 'subfolder-structure')).toHaveLength(1);
+  });
+
+  it('reports a registered family that could not be loaded', async () => {
+    const reader = validProject();
+    const original = reader.getProject.bind(reader);
+    reader.getProject = () => ({ ...original(), families: { items: ['MissingFamily'], subfolders: [] } });
+    const result = await validateProjectIntegrity(reader);
+    expect(result.errors).toContainEqual(expect.objectContaining({ check: 'file-existence', entity: 'families/MissingFamily' }));
   });
 });

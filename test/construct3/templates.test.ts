@@ -204,9 +204,9 @@ describe('Block Event Template', () => {
     expect(block.disabled).toBe(true);
   });
 
-  it('creates else block', () => {
+  it('creates OR block', () => {
     const block = createBlockEvent(100, [], [], undefined, undefined, true);
-    expect(block.isElse).toBe(true);
+    expect(block.isOrBlock).toBe(true);
   });
 
   it('creates block with children', () => {

@@ -8,6 +8,8 @@ import type { C3Event, EventSheet, FunctionBlockEvent, WriteResult } from '../co
 import { validateName, validateSubfolder, toolResult, toolError, notFoundError, boundedRecord } from './shared.js';
 import {
   conditionSchema,
+  MAX_ITEMS_PER_BLOCK,
+  getBehaviorType,
   actionSchema,
   childEventSchema,
   findGroupByPath,
@@ -19,6 +21,7 @@ import {
   summarizeEvents,
 } from './event-helpers.js';
 import { getProjectIndex, resetProjectIndex } from '../construct3/analyzers/index-builder.js';
+import { validateEventContracts } from './event-contracts.js';
 import {
   createEmptySheet,
   createVariableEvent,
@@ -28,7 +31,7 @@ import {
   createCommentEvent,
 } from '../construct3/templates.js';
 
-export function registerEventTools({ server, reader, writer, idGen }: MutationToolDeps) {
+export function registerEventTools({ server, reader, writer, idGen, knowledge }: MutationToolDeps) {
   // ─── create_event_sheet ───────────────────────────────────
 
   server.tool(
@@ -46,7 +49,7 @@ export function registerEventTools({ server, reader, writer, idGen }: MutationTo
 
         // Check uniqueness
         const existing = await reader.listEventSheets();
-        if (existing.includes(args.name)) {
+        if (existing.some(name => name.toLowerCase() === args.name.toLowerCase())) {
           return toolError(`Event sheet "${args.name}" already exists.`);
         }
 
@@ -198,21 +201,17 @@ export function registerEventTools({ server, reader, writer, idGen }: MutationTo
     'Add a block event (conditions + actions) to an event sheet — the core of gameplay logic. Supports sub-events, else blocks, OR conditions, and per-action disabling.',
     {
       sheetName: z.string().max(200).describe('Target event sheet'),
-      conditions: z.array(conditionSchema).optional().default([]).describe('Conditions array (at least one required, unless isElse is true)'),
+      conditions: z.array(conditionSchema).optional().default([]).describe('Conditions array; empty means unconditional execution'),
       actions: z.array(actionSchema).optional().default([]).describe('Actions array (standard actions or script actions)'),
       groupPath: z.string().max(500).optional().describe('Insert inside group by title path (e.g., "Movement > Collision")'),
       position: z.enum(['start', 'end']).optional().default('end').describe('Where to insert the event block'),
       disabled: z.boolean().optional().default(false).describe('Create the event block disabled'),
-      isElse: z.boolean().optional().default(false).describe('Mark as an else block (conditions become optional)'),
+      isElse: z.boolean().optional().default(false).describe('Prepend System Else; additional conditions are retained'),
+      isOrBlock: z.boolean().optional().describe('OR-combine all conditions in this block'),
       children: z.array(childEventSchema).optional().default([]).describe('Sub-events nested inside this block (recursive, max depth 5, max 50 total events)'),
     },
     async (args) => {
       try {
-        // Validate: non-else blocks must have at least one condition
-        if (!args.isElse && args.conditions.length === 0) {
-          return toolError('At least one condition is required (unless isElse is true).');
-        }
-
         // Read the target event sheet
         let sheet: EventSheet;
         try {
@@ -222,7 +221,7 @@ export function registerEventTools({ server, reader, writer, idGen }: MutationTo
         }
 
         // Collect all objectClass references from entire tree (parent + descendants)
-        const allRefs: Array<{ objectClass: string; 'behavior-type'?: string }> = [];
+        const allRefs: Array<{ objectClass: string; behaviorType?: string; 'behavior-type'?: string }> = [];
         collectObjectRefs(
           args.conditions,
           args.actions as Array<Record<string, unknown>>,
@@ -230,10 +229,13 @@ export function registerEventTools({ server, reader, writer, idGen }: MutationTo
           allRefs,
         );
 
-        const { errors, warnings } = await validateObjectClasses(reader, allRefs);
+        const { errors, warnings: referenceWarnings } = await validateObjectClasses(reader, allRefs);
+        const warnings = referenceWarnings.filter(warning => !knowledge || !warning.startsWith('Behavior-type '));
         if (errors.length > 0) {
           return toolError(`Object class validation failed:\n${errors.join('\n')}`);
         }
+
+        if (knowledge) await validateEventContracts(reader, knowledge, args);
 
         // Build the block event recursively (handles children, SIDs, safety limits)
         const counter = { count: 0, warnings: [] as string[] };
@@ -245,6 +247,7 @@ export function registerEventTools({ server, reader, writer, idGen }: MutationTo
             actions: args.actions,
             disabled: args.disabled,
             isElse: args.isElse,
+            isOrBlock: args.isOrBlock,
             children: args.children,
           },
           1,
@@ -640,6 +643,7 @@ export function registerEventTools({ server, reader, writer, idGen }: MutationTo
 
         const action = actions[args.actionIndex];
         action.parameters = args.parameters;
+        if (knowledge) await validateEventContracts(reader, knowledge, { actions: [action] });
 
         const subfolder = writer.getSubfolderForEntity('eventSheets', args.sheetName);
         const backupPath = await writer.writeEntityFile('eventSheets', args.sheetName, sheet, subfolder);
@@ -793,6 +797,7 @@ export function registerEventTools({ server, reader, writer, idGen }: MutationTo
       sheetName: z.string().max(200).describe('Target event sheet'),
       sid: z.number().int().positive().describe('SID of the block event to update'),
       disabled: z.boolean().optional().describe('Enable or disable the entire block'),
+      isOrBlock: z.boolean().optional().describe('OR-combine all conditions, or set false to restore AND'),
       updateActions: z.array(z.object({
         index: z.number().int().min(0).describe('Action index (0-based)'),
         parameters: boundedRecord().optional().describe('New parameter values — merged with existing (max 100 keys, depth 6)'),
@@ -811,7 +816,7 @@ export function registerEventTools({ server, reader, writer, idGen }: MutationTo
     async (args) => {
       try {
         // Validate at least one update is provided
-        const hasUpdate = args.disabled !== undefined
+        const hasUpdate = args.isOrBlock !== undefined || args.disabled !== undefined
           || (args.updateActions && args.updateActions.length > 0)
           || (args.updateConditions && args.updateConditions.length > 0)
           || (args.addActions && args.addActions.length > 0)
@@ -854,6 +859,12 @@ export function registerEventTools({ server, reader, writer, idGen }: MutationTo
         const conditions = event.conditions as Record<string, unknown>[];
         const actions = event.actions as Record<string, unknown>[];
         const warnings: string[] = [];
+        const changedConditions: Record<string, unknown>[] = [];
+        const changedActions: Record<string, unknown>[] = [];
+        if (args.isOrBlock !== undefined) {
+          if (args.isOrBlock) event.isOrBlock = true;
+          else delete event.isOrBlock;
+        }
 
         // ── Apply block-level disabled toggle ──
         if (args.disabled !== undefined) {
@@ -877,6 +888,7 @@ export function registerEventTools({ server, reader, writer, idGen }: MutationTo
             const cond = conditions[upd.index];
             if (upd.parameters) {
               cond.parameters = { ...(cond.parameters as Record<string, unknown> || {}), ...upd.parameters };
+              changedConditions.push(cond);
             }
             if (upd.isInverted !== undefined) {
               if (upd.isInverted) {
@@ -897,6 +909,7 @@ export function registerEventTools({ server, reader, writer, idGen }: MutationTo
             const act = actions[upd.index];
             if (upd.parameters) {
               act.parameters = { ...(act.parameters as Record<string, unknown> || {}), ...upd.parameters };
+              changedActions.push(act);
             }
             if (upd.disabled !== undefined) {
               if (upd.disabled) {
@@ -935,13 +948,13 @@ export function registerEventTools({ server, reader, writer, idGen }: MutationTo
           // Validate objectClasses
           const refs = args.addConditions.map(c => ({
             objectClass: c.objectClass,
-            'behavior-type': c['behavior-type'],
+            behaviorType: getBehaviorType(c),
           }));
           const { errors, warnings: valWarnings } = await validateObjectClasses(reader, refs);
           if (errors.length > 0) {
             return toolError(`Object class validation failed:\n${errors.join('\n')}`);
           }
-          warnings.push(...valWarnings);
+          warnings.push(...valWarnings.filter(warning => !knowledge || !warning.startsWith('Behavior-type ')));
 
           for (const c of args.addConditions) {
             const condSid = await idGen.generateSid(reader);
@@ -950,10 +963,14 @@ export function registerEventTools({ server, reader, writer, idGen }: MutationTo
               objectClass: c.objectClass,
               sid: condSid,
             };
-            if (c['behavior-type']) built['behavior-type'] = c['behavior-type'];
+            const behaviorType = getBehaviorType(c);
+            if (behaviorType) built.behaviorType = behaviorType;
             if (c.parameters) built.parameters = c.parameters;
             if (c.isInverted) built.isInverted = true;
-            if (c.isOr) built.isOr = true;
+            if (c.isOr) {
+              event.isOrBlock = true;
+              warnings.push('Condition isOr is deprecated: OR applies to the entire block. Use isOrBlock.');
+            }
             conditions.push(built);
           }
         }
@@ -961,10 +978,10 @@ export function registerEventTools({ server, reader, writer, idGen }: MutationTo
         // ── Add new actions ──
         if (args.addActions && args.addActions.length > 0) {
           // Validate objectClasses for standard actions
-          const refs: Array<{ objectClass: string; 'behavior-type'?: string }> = [];
+          const refs: Array<{ objectClass: string; behaviorType?: string; 'behavior-type'?: string }> = [];
           for (const a of args.addActions) {
             if ('objectClass' in a && typeof a.objectClass === 'string') {
-              refs.push({ objectClass: a.objectClass, 'behavior-type': a['behavior-type'] });
+              refs.push({ objectClass: a.objectClass, behaviorType: getBehaviorType(a) });
             }
           }
           if (refs.length > 0) {
@@ -972,7 +989,7 @@ export function registerEventTools({ server, reader, writer, idGen }: MutationTo
             if (errors.length > 0) {
               return toolError(`Object class validation failed:\n${errors.join('\n')}`);
             }
-            warnings.push(...valWarnings);
+            warnings.push(...valWarnings.filter(warning => !knowledge || !warning.startsWith('Behavior-type ')));
           }
 
           for (const a of args.addActions) {
@@ -983,6 +1000,8 @@ export function registerEventTools({ server, reader, writer, idGen }: MutationTo
               };
               if (a.disabled) scriptAct.disabled = true;
               actions.push(scriptAct);
+            } else if ('callFunction' in a && !('id' in a)) {
+              actions.push({ callFunction: a.callFunction, parameters: a.parameters ?? [], sid: await idGen.generateSid(reader), ...(a.disabled ? { disabled: true } : {}) });
             } else if ('id' in a) {
               const actSid = await idGen.generateSid(reader);
               const built: Record<string, unknown> = {
@@ -990,7 +1009,8 @@ export function registerEventTools({ server, reader, writer, idGen }: MutationTo
                 objectClass: a.objectClass,
                 sid: actSid,
               };
-              if (a['behavior-type']) built['behavior-type'] = a['behavior-type'];
+              const behaviorType = getBehaviorType(a);
+              if (behaviorType) built.behaviorType = behaviorType;
               if (a.parameters) built.parameters = a.parameters;
               if (a.callFunction) built.callFunction = a.callFunction;
               if (a.disabled) built.disabled = true;
@@ -999,8 +1019,14 @@ export function registerEventTools({ server, reader, writer, idGen }: MutationTo
           }
         }
 
+        if (conditions.length > MAX_ITEMS_PER_BLOCK || actions.length > MAX_ITEMS_PER_BLOCK) throw new Error(`Resulting block exceeds ${MAX_ITEMS_PER_BLOCK} conditions or actions`);
+        if (knowledge) await validateEventContracts(reader, knowledge, {
+          conditions: [...new Set(changedConditions.filter(item => conditions.includes(item))), ...(args.addConditions ?? [])],
+          actions: [...new Set(changedActions.filter(item => actions.includes(item))), ...(args.addActions ?? [])],
+        });
+
         // Warn if all conditions were removed (checked after adds, not just removals)
-        if (conditions.length === 0 && !event.isElse) {
+        if (conditions.length === 0) {
           warnings.push('All conditions were removed — block will match unconditionally (always true).');
         }
 

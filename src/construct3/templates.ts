@@ -409,7 +409,7 @@ export function createBlockEvent(
   actions: Action[],
   disabled?: boolean,
   children?: C3Event[],
-  isElse?: boolean,
+  isOrBlock?: boolean,
 ): BlockEvent {
   return {
     eventType: 'block',
@@ -418,7 +418,7 @@ export function createBlockEvent(
     children: children ?? [],
     sid,
     ...(disabled ? { disabled: true } : {}),
-    ...(isElse ? { isElse: true } : {}),
+    ...(isOrBlock ? { isOrBlock: true } : {}),
   };
 }
 

@@ -152,7 +152,7 @@ describe('Construct3ProjectWriter (integration)', () => {
     expect(backupPath).toContain('.bak');
 
     // File should exist and be valid JSON
-    const written = await readFile(join(tmpDir, 'objectTypes', 'NewSprite.json'), 'utf-8');
+    const written = await readFile(join(tmpDir, 'objectTypes', 'newsprite.json'), 'utf-8');
     const parsed = JSON.parse(written);
     expect(parsed.name).toBe('NewSprite');
   });

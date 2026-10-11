@@ -17,19 +17,21 @@ import { boundedRecord } from './shared.js';
 export const conditionSchema = z.object({
   id: z.string().describe('Condition ACE id (kebab-case, e.g., "on-start-of-layout", "on-collision-with-another-object")'),
   objectClass: z.string().describe('Object name or "System"'),
-  'behavior-type': z.string().optional().describe('Behavior type (e.g., "Platform", "8Direction")'),
+  behaviorType: z.string().optional().describe('Behavior instance name (e.g., "Platform", "8Direction")'),
+  'behavior-type': z.string().optional().describe('Legacy alias for behaviorType'),
   parameters: boundedRecord()
     .refine(obj => JSON.stringify(obj).length <= 50_000, 'Parameters payload too large (max 50KB)')
     .optional().describe('Condition parameters as key-value pairs (max 100 keys, depth 6)'),
   isInverted: z.boolean().optional().describe('Negate the condition'),
-  isOr: z.boolean().optional().describe('OR-combine with previous condition (default: AND)'),
+  isOr: z.boolean().optional().describe('Deprecated: enables OR for the entire block; use isOrBlock'),
 });
 
 /** Standard action schema */
 export const standardActionSchema = z.object({
   id: z.string().describe('Action ACE id (kebab-case, e.g., "set-instvar-value", "destroy")'),
   objectClass: z.string().describe('Object name or "System"'),
-  'behavior-type': z.string().optional().describe('Behavior type'),
+  behaviorType: z.string().optional().describe('Behavior instance name'),
+  'behavior-type': z.string().optional().describe('Legacy alias for behaviorType'),
   parameters: boundedRecord()
     .refine(obj => JSON.stringify(obj).length <= 50_000, 'Parameters payload too large (max 50KB)')
     .optional().describe('Action parameters as key-value pairs (max 100 keys, depth 6)'),
@@ -45,15 +47,20 @@ export const scriptActionSchema = z.object({
 });
 
 /** Union of standard and script actions */
-export const actionSchema = z.union([standardActionSchema, scriptActionSchema]);
+export const functionCallActionSchema = z.object({
+  callFunction: z.string().max(200), parameters: z.array(z.union([z.string().max(50_000), z.number().finite()])).max(100).optional(),
+  disabled: z.boolean().optional(),
+}).strict();
+export const actionSchema = z.union([functionCallActionSchema, standardActionSchema, scriptActionSchema]);
 
 // ─── Recursive Child Event Schema ───────────────────────────
 
 export interface ChildEventInput {
   conditions?: Array<z.infer<typeof conditionSchema>>;
-  actions?: Array<z.infer<typeof standardActionSchema> | z.infer<typeof scriptActionSchema>>;
+  actions?: Array<z.infer<typeof actionSchema>>;
   disabled?: boolean;
   isElse?: boolean;
+  isOrBlock?: boolean;
   children?: ChildEventInput[];
 }
 
@@ -62,6 +69,7 @@ export const childEventSchema: z.ZodType<ChildEventInput> = z.lazy(() => z.objec
   actions: z.array(actionSchema).optional().default([]),
   disabled: z.boolean().optional(),
   isElse: z.boolean().optional(),
+  isOrBlock: z.boolean().optional(),
   children: z.array(childEventSchema).optional().default([]),
 }));
 
@@ -233,17 +241,24 @@ export function findGroupByPath(
   return groups[groups.length - 1].children as Record<string, unknown>[];
 }
 
+export function getBehaviorType(ref: { behaviorType?: string; 'behavior-type'?: string }): string | undefined {
+  if (ref.behaviorType && ref['behavior-type'] && ref.behaviorType !== ref['behavior-type']) {
+    throw new Error('Conflicting behaviorType and behavior-type values');
+  }
+  return ref.behaviorType ?? ref['behavior-type'];
+}
+
 // ─── Object Class Validation ────────────────────────────────
 
 /** Validate objectClass references against project objects, families, and "System". */
 export async function validateObjectClasses(
   reader: Construct3ProjectReader,
-  refs: Array<{ objectClass: string; 'behavior-type'?: string }>,
+  refs: Array<{ objectClass: string; behaviorType?: string; 'behavior-type'?: string }>,
 ): Promise<{ errors: string[]; warnings: string[] }> {
   const objects = await reader.listObjectTypes();
   // listFamilies() reads from an in-memory Map and never throws — no try/catch needed.
   const families = await reader.listFamilies();
-  const validClasses = new Set([...objects, ...families, 'System']);
+  const validClasses = new Set([...objects, ...families, 'System', 'Functions']);
 
   const errors: string[] = [];
   const warnings: string[] = [];
@@ -256,9 +271,10 @@ export async function validateObjectClasses(
         : '';
       errors.push(`Unknown objectClass "${ref.objectClass}".${hint}`);
     }
-    if (ref['behavior-type']) {
+    const behaviorType = getBehaviorType(ref);
+    if (behaviorType) {
       // Soft validate: warn but allow (behavior may come from families or third-party plugins)
-      warnings.push(`Behavior-type "${ref['behavior-type']}" on "${ref.objectClass}" was not validated — ensure it exists on the object or its families.`);
+      warnings.push(`Behavior-type "${behaviorType}" on "${ref.objectClass}" was not validated — ensure it exists on the object or its families.`);
     }
   }
 
@@ -270,21 +286,21 @@ export async function validateObjectClasses(
 /** Collect all objectClass references from a block and all its descendants.
  *  Depth-limited to match buildBlockEvent's MAX_NESTING_DEPTH guard. */
 export function collectObjectRefs(
-  conditions: Array<{ objectClass: string; 'behavior-type'?: string }>,
+  conditions: Array<{ objectClass: string; behaviorType?: string; 'behavior-type'?: string }>,
   actions: Array<Record<string, unknown>>,
   children: ChildEventInput[],
-  refs: Array<{ objectClass: string; 'behavior-type'?: string }>,
+  refs: Array<{ objectClass: string; behaviorType?: string; 'behavior-type'?: string }>,
   depth = 0,
 ): void {
   if (depth > MAX_NESTING_DEPTH) {
     throw new Error(`collectObjectRefs nesting exceeds maximum depth of ${MAX_NESTING_DEPTH}`);
   }
   for (const c of conditions) {
-    refs.push({ objectClass: c.objectClass, 'behavior-type': c['behavior-type'] });
+    refs.push({ objectClass: c.objectClass, behaviorType: getBehaviorType(c) });
   }
   for (const a of actions) {
     if ('objectClass' in a && typeof a.objectClass === 'string') {
-      refs.push({ objectClass: a.objectClass, 'behavior-type': a['behavior-type'] as string | undefined });
+      refs.push({ objectClass: a.objectClass, behaviorType: getBehaviorType(a as { behaviorType?: string; 'behavior-type'?: string }) });
     }
   }
   for (const child of children) {
@@ -307,9 +323,10 @@ export async function buildBlockEvent(
   idGen: IdGenerator,
   block: {
     conditions: Array<z.infer<typeof conditionSchema>>;
-    actions: Array<z.infer<typeof standardActionSchema> | z.infer<typeof scriptActionSchema>>;
+    actions: Array<z.infer<typeof actionSchema>>;
     disabled?: boolean;
     isElse?: boolean;
+    isOrBlock?: boolean;
     children: ChildEventInput[];
   },
   depth: number,
@@ -323,11 +340,6 @@ export async function buildBlockEvent(
     throw new Error(`Total event count exceeds maximum of ${MAX_TOTAL_EVENTS}`);
   }
 
-  // Validate: non-else blocks must have at least one condition
-  if (!block.isElse && block.conditions.length === 0) {
-    throw new Error(`Non-else event block at depth ${depth} has no conditions. Add conditions or set isElse: true.`);
-  }
-
   // Cap conditions and actions per block to prevent SID amplification
   if (block.conditions.length > MAX_ITEMS_PER_BLOCK) {
     throw new Error(`Block has ${block.conditions.length} conditions (max ${MAX_ITEMS_PER_BLOCK})`);
@@ -336,31 +348,32 @@ export async function buildBlockEvent(
     throw new Error(`Block has ${block.actions.length} actions (max ${MAX_ITEMS_PER_BLOCK})`);
   }
 
-  // Warn: isElse blocks with conditions (C3 ignores them)
-  if (block.isElse && block.conditions.length > 0) {
-    counter.warnings.push(`Else block at depth ${depth} has ${block.conditions.length} condition(s) — C3 ignores conditions on else blocks.`);
+  const hasLegacyOr = block.conditions.some(c => c.isOr);
+  if (hasLegacyOr) {
+    counter.warnings.push('Condition isOr is deprecated: OR applies to the entire block. Use isOrBlock.');
   }
-
-  // Warn: isOr on the first condition is meaningless
-  if (block.conditions.length > 0 && block.conditions[0].isOr) {
-    counter.warnings.push(`First condition at depth ${depth} has isOr: true — this is ignored by C3 (no previous condition to OR with).`);
+  const inputConditions: Array<z.infer<typeof conditionSchema>> = block.isElse && !block.conditions.some(c => c.objectClass === 'System' && c.id === 'else')
+    ? [{ id: 'else', objectClass: 'System' }, ...block.conditions]
+    : block.conditions;
+  if (inputConditions.length > MAX_ITEMS_PER_BLOCK) {
+    throw new Error(`Block has ${inputConditions.length} conditions (max ${MAX_ITEMS_PER_BLOCK})`);
   }
 
   const blockSid = await idGen.generateSid(reader);
 
   // Build conditions with SIDs
   const builtConditions: Condition[] = [];
-  for (const c of block.conditions) {
+  for (const c of inputConditions) {
     const condSid = await idGen.generateSid(reader);
     const cond: Condition = {
       id: c.id,
       objectClass: c.objectClass,
       sid: condSid,
     };
-    if (c['behavior-type']) cond['behavior-type'] = c['behavior-type'];
+    const behaviorType = getBehaviorType(c);
+    if (behaviorType) cond.behaviorType = behaviorType;
     if (c.parameters) cond.parameters = c.parameters;
     if (c.isInverted) cond.isInverted = true;
-    if (c.isOr) cond.isOr = true;
     builtConditions.push(cond);
   }
 
@@ -374,6 +387,8 @@ export async function buildBlockEvent(
       };
       if (a.disabled) scriptAct.disabled = true;
       builtActions.push(scriptAct);
+    } else if ('callFunction' in a && !('id' in a)) {
+      builtActions.push({ callFunction: a.callFunction!, parameters: a.parameters ?? [], sid: await idGen.generateSid(reader), ...(a.disabled ? { disabled: true } : {}) });
     } else if ('id' in a) {
       const actSid = await idGen.generateSid(reader);
       const act: Action = {
@@ -381,7 +396,8 @@ export async function buildBlockEvent(
         objectClass: a.objectClass,
         sid: actSid,
       };
-      if (a['behavior-type']) act['behavior-type'] = a['behavior-type'];
+      const behaviorType = getBehaviorType(a);
+      if (behaviorType) act.behaviorType = behaviorType;
       if (a.parameters) act.parameters = a.parameters;
       if (a.callFunction) act.callFunction = a.callFunction;
       if (a.disabled) act.disabled = true;
@@ -400,6 +416,7 @@ export async function buildBlockEvent(
         actions: child.actions ?? [],
         disabled: child.disabled,
         isElse: child.isElse,
+        isOrBlock: child.isOrBlock,
         children: child.children ?? [],
       },
       depth + 1,
@@ -414,6 +431,6 @@ export async function buildBlockEvent(
     builtActions,
     block.disabled || undefined,
     builtChildren.length > 0 ? builtChildren : undefined,
-    block.isElse || undefined,
+    block.isOrBlock || hasLegacyOr || undefined,
   );
 }

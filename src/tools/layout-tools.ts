@@ -35,7 +35,7 @@ export function registerLayoutTools({ server, reader, writer, idGen }: MutationT
 
         // Check uniqueness
         const existing = await reader.listLayouts();
-        if (existing.includes(args.name)) {
+        if (existing.some(name => name.toLowerCase() === args.name.toLowerCase())) {
           return toolError(`Layout "${args.name}" already exists.`);
         }
 

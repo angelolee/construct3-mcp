@@ -154,10 +154,7 @@ export class Construct3ProjectWriter {
     // Pre-write validation
     const json = this.validateJsonData(data, name);
 
-    const segments = subfolder
-      ? [category, subfolder, `${name}.json`]
-      : [category, `${name}.json`];
-    const filePath = resolveProjectPath(this.reader.getProjectDir(), ...segments);
+    const filePath = await this.reader.getEntityFilePath(category, name, subfolder);
 
     // Ensure directory exists
     await mkdir(dirname(filePath), { recursive: true });
@@ -180,10 +177,7 @@ export class Construct3ProjectWriter {
     name: string,
     subfolder?: string,
   ): Promise<string> {
-    const segments = subfolder
-      ? [category, subfolder, `${name}.json`]
-      : [category, `${name}.json`];
-    const filePath = resolveProjectPath(this.reader.getProjectDir(), ...segments);
+    const filePath = await this.reader.getEntityFilePath(category, name, subfolder);
 
     const backupPath = await this.createBackup(filePath);
     try {

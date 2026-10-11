@@ -115,16 +115,43 @@ export class Construct3ProjectReader {
     return dirname(this.projectPath);
   }
 
+  async getEntityFilePath(
+    category: 'objectTypes' | 'eventSheets' | 'layouts' | 'families',
+    name: string,
+    subfolder?: string,
+  ): Promise<string> {
+    const maps = {
+      objectTypes: this.objectPathMap, eventSheets: this.eventSheetPathMap,
+      layouts: this.layoutPathMap, families: this.familyPathMap,
+    };
+    const subPath = subfolder ?? maps[category].get(name);
+    const dir = this.getProjectDir();
+    // Editor folders are virtual; retain physical nested paths for older MCP projects.
+    const candidates = [
+      resolveProjectPath(dir, category, `${name.toLowerCase()}.json`),
+      resolveProjectPath(dir, category, `${name}.json`),
+      ...(subPath ? [
+        resolveProjectPath(dir, category, subPath, `${name.toLowerCase()}.json`),
+        resolveProjectPath(dir, category, subPath, `${name}.json`),
+      ] : []),
+    ];
+    for (const path of new Set(candidates)) {
+      try {
+        await stat(path);
+        return path;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT' && (error as NodeJS.ErrnoException).code !== 'ENOTDIR') throw error;
+      }
+    }
+    return candidates[0];
+  }
+
   /**
    * Read an event sheet file
    */
   async readEventSheet(name: string): Promise<EventSheet> {
-    const subPath = this.eventSheetPathMap.get(name);
-    const segments = subPath
-      ? ['eventSheets', subPath, `${name}.json`]
-      : ['eventSheets', `${name}.json`];
-    const eventSheetPath = resolveProjectPath(this.getProjectDir(), ...segments);
     try {
+      const eventSheetPath = await this.getEntityFilePath('eventSheets', name);
       const content = await this.readProjectFile(eventSheetPath);
       return JSON.parse(content) as EventSheet;
     } catch (error) {
@@ -139,12 +166,8 @@ export class Construct3ProjectReader {
    * Read an object type file
    */
   async readObjectType(name: string): Promise<ObjectType> {
-    const subPath = this.objectPathMap.get(name);
-    const segments = subPath
-      ? ['objectTypes', subPath, `${name}.json`]
-      : ['objectTypes', `${name}.json`];
-    const objectPath = resolveProjectPath(this.getProjectDir(), ...segments);
     try {
+      const objectPath = await this.getEntityFilePath('objectTypes', name);
       const content = await this.readProjectFile(objectPath);
       return JSON.parse(content) as ObjectType;
     } catch (error) {
@@ -159,12 +182,8 @@ export class Construct3ProjectReader {
    * Read a layout file
    */
   async readLayout(name: string): Promise<Layout> {
-    const subPath = this.layoutPathMap.get(name);
-    const segments = subPath
-      ? ['layouts', subPath, `${name}.json`]
-      : ['layouts', `${name}.json`];
-    const layoutPath = resolveProjectPath(this.getProjectDir(), ...segments);
     try {
+      const layoutPath = await this.getEntityFilePath('layouts', name);
       const content = await this.readProjectFile(layoutPath);
       return JSON.parse(content) as Layout;
     } catch (error) {
@@ -179,12 +198,8 @@ export class Construct3ProjectReader {
    * Read a family file
    */
   async readFamily(name: string): Promise<Record<string, unknown>> {
-    const subPath = this.familyPathMap.get(name);
-    const segments = subPath
-      ? ['families', subPath, `${name}.json`]
-      : ['families', `${name}.json`];
-    const familyPath = resolveProjectPath(this.getProjectDir(), ...segments);
     try {
+      const familyPath = await this.getEntityFilePath('families', name);
       const content = await this.readProjectFile(familyPath);
       return JSON.parse(content) as Record<string, unknown>;
     } catch (error) {

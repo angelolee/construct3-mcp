@@ -62,6 +62,10 @@ describe('findGroupByPath', () => {
 });
 
 describe('validateObjectClasses', () => {
+  it('accepts the built-in Functions namespace', async () => {
+    const { errors } = await validateObjectClasses(new MockReader() as any, [{ objectClass: 'Functions' }]);
+    expect(errors).toEqual([]);
+  });
   it('accepts valid object classes', async () => {
     const reader = new MockReader({
       objects: new Map([['Player', { name: 'Player', 'plugin-id': 'Sprite', sid: 1 }]]),
@@ -200,7 +204,7 @@ describe('buildBlockEvent', () => {
       counter,
     );
 
-    expect(block.isElse).toBe(true);
+    expect(block.conditions[0]).toMatchObject({ id: 'else', objectClass: 'System' });
   });
 
   it('builds script actions', async () => {
@@ -264,32 +268,18 @@ describe('buildBlockEvent', () => {
     ).rejects.toThrow('maximum of');
   });
 
-  it('rejects non-else block without conditions', async () => {
-    const reader = new MockReader();
-    const idGen = new MockIdGenerator();
-    const counter = { count: 0, warnings: [] };
-
-    await expect(
-      buildBlockEvent(
-        reader as any,
-        idGen as any,
-        {
-          conditions: [],
-          actions: [],
-          children: [],
-        },
-        1,
-        counter,
-      ),
-    ).rejects.toThrow('no conditions');
+  it('builds an unconditional block', async () => {
+    const block = await buildBlockEvent(new MockReader() as any, new MockIdGenerator() as any,
+      { conditions: [], actions: [], children: [] }, 1, { count: 0, warnings: [] });
+    expect(block.conditions).toEqual([]);
   });
 
-  it('warns about else block with conditions', async () => {
+  it('retains filters on an Else block', async () => {
     const reader = new MockReader();
     const idGen = new MockIdGenerator();
     const counter = { count: 0, warnings: [] };
 
-    await buildBlockEvent(
+    const block = await buildBlockEvent(
       reader as any,
       idGen as any,
       {
@@ -302,10 +292,11 @@ describe('buildBlockEvent', () => {
       counter,
     );
 
-    expect(counter.warnings.some(w => w.includes('Else block'))).toBe(true);
+    expect(block.conditions.map(c => c.id)).toEqual(['else', 'x']);
+    expect(counter.warnings).toEqual([]);
   });
 
-  it('warns about isOr on first condition', async () => {
+  it('warns about legacy condition isOr', async () => {
     const reader = new MockReader();
     const idGen = new MockIdGenerator();
     const counter = { count: 0, warnings: [] };
@@ -325,7 +316,7 @@ describe('buildBlockEvent', () => {
     expect(counter.warnings.some(w => w.includes('isOr'))).toBe(true);
   });
 
-  it('sets isInverted and isOr on conditions', async () => {
+  it('preserves inversion and maps legacy OR to the block', async () => {
     const reader = new MockReader();
     const idGen = new MockIdGenerator();
     const counter = { count: 0, warnings: [] };
@@ -346,7 +337,8 @@ describe('buildBlockEvent', () => {
     );
 
     expect(block.conditions[1].isInverted).toBe(true);
-    expect(block.conditions[1].isOr).toBe(true);
+    expect(block.isOrBlock).toBe(true);
+    expect(block.conditions[1]).not.toHaveProperty('isOr');
   });
 
   it('sets disabled on actions', async () => {
@@ -519,5 +511,39 @@ describe('summarizeEvents', () => {
     })) as Record<string, unknown>[];
     const summary = summarizeEvents(events, 5);
     expect(summary).toContain('10 more');
+  });
+});
+
+describe('Construct event format compatibility', () => {
+  const build = (input: any) => buildBlockEvent(new MockReader() as any, new MockIdGenerator() as any, { conditions: [], actions: [], children: [], ...input }, 1, { count: 0, warnings: [] });
+
+  it('serializes behavior instance names with the canonical field', async () => {
+    const block = await build({ conditions: [{ id: 'is-moving', objectClass: 'Player', 'behavior-type': '8Direction' }], actions: [{ id: 'set-speed', objectClass: 'Player', 'behavior-type': '8Direction', parameters: { speed: '100' } }] });
+    expect(block.conditions[0]).toMatchObject({ behaviorType: '8Direction' });
+    expect(block.actions[0]).toMatchObject({ behaviorType: '8Direction' });
+    expect(block.conditions[0]).not.toHaveProperty('behavior-type');
+    expect(block.actions[0]).not.toHaveProperty('behavior-type');
+  });
+
+  it('serializes OR on the block instead of individual conditions', async () => {
+    const block = await build({ isOrBlock: true, conditions: [{ id: 'compare', objectClass: 'System' }, { id: 'compare', objectClass: 'System' }] });
+    expect(block.isOrBlock).toBe(true);
+    expect(block.conditions.every(c => !('isOr' in c))).toBe(true);
+  });
+
+  it('represents Else as a condition and preserves additional filters', async () => {
+    const block = await build({ isElse: true, conditions: [{ id: 'compare', objectClass: 'System', isInverted: true }] });
+    expect(block.conditions).toHaveLength(2);
+    expect(block.conditions[0]).toMatchObject({ id: 'else', objectClass: 'System' });
+    expect(block.conditions[1]).toMatchObject({ id: 'compare', isInverted: true });
+    expect(new Set([block.sid, ...block.conditions.map(c => c.sid)]).size).toBe(3);
+    expect(block).not.toHaveProperty('isElse');
+  });
+
+  it('allows unconditional blocks and unconditional children', async () => {
+    const block = await build({ actions: [{ id: 'set-eventvar-value', objectClass: 'System' }], children: [{ actions: [{ id: 'set-eventvar-value', objectClass: 'System' }] }] });
+    expect(block.conditions).toEqual([]);
+    expect((block.children![0] as any).conditions).toEqual([]);
+    expect((block.children![0] as any).actions).toHaveLength(1);
   });
 });

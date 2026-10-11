@@ -43,6 +43,9 @@ CLAUDE.md
 *~
 .DS_Store
 
+# Machine-local code index
+/.codegraph/
+
 # Testing
 coverage/
 .nyc_output/

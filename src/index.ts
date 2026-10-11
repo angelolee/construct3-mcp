@@ -17,6 +17,9 @@ import { registerMutationTools } from './tools/mutations.js';
 import { Construct3ProjectWriter } from './construct3/project-writer.js';
 import { IdGenerator } from './construct3/id-generator.js';
 import { registerRuntimeTools } from './tools/runtime-tools.js';
+import { KnowledgeBase } from './knowledge/base.js';
+import { registerKnowledgeTools } from './tools/knowledge-tools.js';
+import { registerBootstrapTools } from './tools/bootstrap-tools.js';
 
 // Use explicit path if given, otherwise auto-detect .c3proj in current working directory
 const projectPath: string = process.argv[2] || process.env.C3_PROJECT_PATH || process.cwd();
@@ -52,6 +55,14 @@ async function main() {
     console.error('Construct3 MCP Server starting...');
     console.error(`Project path: ${projectPath}`);
 
+    const knowledge = process.env.C3_KNOWLEDGE_PATH ? new KnowledgeBase(process.env.C3_KNOWLEDGE_PATH) : undefined;
+    if (knowledge) { registerKnowledgeTools(server, knowledge); registerBootstrapTools(server, knowledge); }
+    const explicitProject = process.argv[2] || process.env.C3_PROJECT_PATH;
+    if (knowledge && !explicitProject && !await Construct3ProjectReader.findProjectFile(projectPath)) {
+      await server.connect(new StdioServerTransport());
+      console.error('Knowledge-only MCP ready; create a project, then connect to its returned path');
+      return;
+    }
     const reader = await initializeProject(projectPath);
 
     // Register all modular handlers
@@ -64,7 +75,7 @@ async function main() {
     // Phase 3: Safe Modifications
     const idGen = new IdGenerator();
     const writer = new Construct3ProjectWriter(reader, idGen);
-    registerMutationTools(server, reader, writer, idGen);
+    registerMutationTools(server, reader, writer, idGen, knowledge);
 
     // Runtime Control (for live game testing via browser automation)
     registerRuntimeTools({ server, reader, writer });

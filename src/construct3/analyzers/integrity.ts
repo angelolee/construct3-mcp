@@ -4,7 +4,7 @@
  * orphaned files, and more.
  */
 
-import { readdir } from 'fs/promises';
+import { readdir, realpath } from 'fs/promises';
 import { join } from 'path';
 import type { Construct3ProjectReader } from '../project-reader.js';
 import type { C3Event, Construct3Project, Layout, ObjectType, EventSheet } from '../types.js';
@@ -58,6 +58,7 @@ export async function validateProjectIntegrity(
   const registeredObjects = flattenContainer(project.objectTypes);
   const registeredSheets = flattenContainer(project.eventSheets);
   const registeredLayouts = flattenContainer(project.layouts);
+  const registeredFamilies = flattenContainer(project.families);
 
   const entitiesScanned =
     registeredObjects.length + registeredSheets.length + registeredLayouts.length;
@@ -66,6 +67,7 @@ export async function validateProjectIntegrity(
   checkFileExistence(registeredObjects, objects, 'objectTypes', errors);
   checkFileExistence(registeredSheets, eventSheets, 'eventSheets', errors);
   checkFileExistence(registeredLayouts, layouts, 'layouts', errors);
+  checkFileExistence(registeredFamilies, families, 'families', errors);
   checkRequiredFieldsObjects(objects, errors);
   checkRequiredFieldsSheets(eventSheets, errors);
   checkRequiredFieldsLayouts(layouts, errors);
@@ -274,18 +276,20 @@ function checkSubfolderStructure(
 
   for (const { name, container } of containers) {
     if (!container || !Array.isArray(container.subfolders)) continue;
-    validateSubfolders(container.subfolders as Array<Record<string, unknown>>, name, errors);
+    validateSubfolders(container.subfolders as Array<Record<string, unknown>>, name, errors, name === 'timelines');
   }
 }
 
 function validateSubfolders(
   subfolders: Array<Record<string, unknown>>,
   path: string,
-  errors: IntegrityIssue[]
+  errors: IntegrityIssue[],
+  allowRootWrapper = false,
 ): void {
   for (let i = 0; i < subfolders.length; i++) {
     const sf = subfolders[i];
-    if (typeof sf.name !== 'string' || sf.name === '') {
+    const isRootWrapper = allowRootWrapper && i === 0 && sf.name === undefined;
+    if (!isRootWrapper && (typeof sf.name !== 'string' || sf.name === '')) {
       errors.push({
         check: 'subfolder-structure',
         entity: `${path}/subfolders[${i}]`,
@@ -539,6 +543,7 @@ async function checkBrokenObjectReferences(
     ...index.allObjects,
     ...families.keys(),
     'System',
+    'Functions',
   ]);
 
   for (const [objName] of index.objectToEventSheets) {
@@ -666,70 +671,59 @@ async function checkOrphanedFiles(
   registeredLayouts: string[],
   info: IntegrityIssue[]
 ): Promise<void> {
-  const projectDir = reader.getProjectDir();
-
-  await scanDirForOrphans(projectDir, 'objectTypes', new Set(registeredObjects), info);
-  await scanDirForOrphans(projectDir, 'eventSheets', new Set(registeredSheets), info);
-  await scanDirForOrphans(projectDir, 'layouts', new Set(registeredLayouts), info);
-}
-
-async function scanDirForOrphans(
-  projectDir: string,
-  dirName: string,
-  registered: Set<string>,
-  info: IntegrityIssue[]
-): Promise<void> {
-  try {
-    const dirPath = join(projectDir, dirName);
-    const entries = await readdir(dirPath, { withFileTypes: true });
-    for (const entry of entries) {
-      if (entry.isFile() && entry.name.endsWith('.json')) {
-        const baseName = entry.name.replace(/\.json$/, '');
-        if (!registered.has(baseName)) {
-          info.push({
-            check: 'orphaned-file',
-            entity: `${dirName}/${entry.name}`,
-            message: `File exists on disk but is not registered in c3proj`,
-            suggestion: `Delete the file or register it in the project`,
-          });
-        }
+  const categories = [
+    ['objectTypes', registeredObjects],
+    ['eventSheets', registeredSheets],
+    ['layouts', registeredLayouts],
+  ] as const;
+  for (const [category, names] of categories) {
+    const directory = join(reader.getProjectDir(), category);
+    try {
+      await readdir(directory);
+    } catch {
+      continue;
+    }
+    const registered = new Set<string>();
+    for (const name of names) {
+      const path = await reader.getEntityFilePath(category, name);
+      try {
+        registered.add(await realpath(path));
+      } catch {
+        // Missing registered files are reported by the file-existence check.
       }
     }
-    // Recurse into subdirectories
-    for (const entry of entries) {
-      if (entry.isDirectory()) {
-        await scanSubdirForOrphans(join(dirPath, entry.name), dirName, entry.name, registered, info);
-      }
-    }
-  } catch {
-    // Directory doesn't exist or not readable — skip (common in tests)
+    await scanDirForOrphans(directory, category, registered, info);
   }
 }
 
-async function scanSubdirForOrphans(
-  subDirPath: string,
-  category: string,
-  subDirName: string,
+async function scanDirForOrphans(
+  directory: string,
+  relativeDirectory: string,
   registered: Set<string>,
   info: IntegrityIssue[]
 ): Promise<void> {
+  let entries;
   try {
-    const entries = await readdir(subDirPath, { withFileTypes: true });
-    for (const entry of entries) {
-      if (entry.isFile() && entry.name.endsWith('.json')) {
-        const baseName = entry.name.replace(/\.json$/, '');
-        if (!registered.has(baseName)) {
-          info.push({
-            check: 'orphaned-file',
-            entity: `${category}/${subDirName}/${entry.name}`,
-            message: `File exists on disk but is not registered in c3proj`,
-            suggestion: `Delete the file or register it in the project`,
-          });
-        }
+    entries = await readdir(directory, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (relativeDirectory === 'layouts' && entry.name === 'uistate' && entry.isDirectory()) continue;
+    const path = join(directory, entry.name);
+    const relativePath = `${relativeDirectory}/${entry.name}`;
+    if (entry.isDirectory()) {
+      await scanDirForOrphans(path, relativePath, registered, info);
+    } else if (entry.isFile() && entry.name.endsWith('.json') && !entry.name.endsWith('.uistate.json')) {
+      if (!registered.has(await realpath(path))) {
+        info.push({
+          check: 'orphaned-file',
+          entity: relativePath,
+          message: 'File exists on disk but is not registered in c3proj',
+          suggestion: 'Delete the file or register it in the project',
+        });
       }
     }
-  } catch {
-    // Skip unreadable
   }
 }
 
