@@ -100,4 +100,23 @@ describe('native object editing context', () => {
     expect(data.instanceVariables.truncated).toBe(true);
     expect(data.coverage.complete).toBe(false);
   });
+
+  it('marks malformed present containers and skipped entries as incomplete', async () => {
+    await put('objectTypes/Sprite.json', { name: 'Sprite', sid: 200, 'plugin-id': 'Sprite', behaviorTypes: 'bad', instanceVariables: [null] });
+    await put('families/actors.json', { name: 'Actors', sid: 600, 'plugin-id': 'Sprite', members: 17 });
+    await put('layouts/Layout 1.json', { name: 'Layout 1', sid: 500, layers: {} });
+    const { data } = await get();
+    expect(data.coverage.complete).toBe(false);
+    expect(data.coverage.malformedOrOversizedFields).toBe(true);
+  });
+
+  it('does not echo oversized identity values as a complete bounded context', async () => {
+    await put('objectTypes/Sprite.json', { name: 'Sprite', sid: 'x'.repeat(1_000_000), 'plugin-id': 'Sprite' });
+    await put('layouts/Layout 1.json', { name: 'Layout 1', layers: [{ name: 'Game', instances: [{ type: 'Sprite', uid: { bad: 'y'.repeat(100_000) }, sid: 'z'.repeat(100_000) }] }] });
+    const { result, data } = await get();
+    expect(result.content[0].text.length).toBeLessThan(128 * 1024);
+    expect(data.coverage.complete).toBe(false);
+    expect(data.object.sid).toBeNull();
+    expect(data.placements.items[0]).toMatchObject({ uid: null, sid: null });
+  });
 });

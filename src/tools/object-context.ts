@@ -10,10 +10,6 @@ function page<T>(items: T[], limit: number) {
   return { items: items.slice(0, limit), total: items.length, truncated: items.length > limit };
 }
 
-function records(value: unknown): Record<string, unknown>[] {
-  return Array.isArray(value) ? value.filter(v => v && typeof v === 'object' && !Array.isArray(v)) : [];
-}
-
 export function registerObjectContextTool(mcpServer: McpServer, reader: Construct3ProjectReader) {
   const server = withProjectSync(mcpServer, reader);
   server.tool('get_object_editing_context',
@@ -37,14 +33,37 @@ export function registerObjectContextTool(mcpServer: McpServer, reader: Construc
         const layouts = await reader.readAllLayouts();
         const warnings: string[] = [];
         let malformed = false;
+        const records = (value: unknown, required = false): Record<string, unknown>[] => {
+          if (value === undefined && !required) return [];
+          if (!Array.isArray(value)) { malformed = true; return []; }
+          return value.filter((v): v is Record<string, unknown> => {
+            const valid = v !== null && typeof v === 'object' && !Array.isArray(v);
+            if (!valid) malformed = true;
+            return valid;
+          });
+        };
+        const identity = (value: unknown, minimum: number): number | null => {
+          if (typeof value === 'number' && Number.isSafeInteger(value) && value >= minimum) return value;
+          malformed = true;
+          return null;
+        };
+        const membersOf = (family: Record<string, unknown>): string[] => {
+          if (!Array.isArray(family.members)) { malformed = true; return []; }
+          return family.members.filter((m): m is string => {
+            if (typeof m === 'string') return true;
+            malformed = true;
+            return false;
+          });
+        };
         // Project JSON is untrusted; cap individual fields as well as list sizes.
         const text = (value: unknown): string | undefined => {
           if (typeof value !== 'string') { malformed = true; return undefined; }
           if (value.length > 300) { malformed = true; return value.slice(0, 300); }
           return value;
         };
-        const memberNames = target.category === 'families' && Array.isArray(object.members) ? object.members.filter((m): m is string => typeof m === 'string') : [];
-        const memberships = target.category === 'objectTypes' ? [...families].filter(([, f]) => Array.isArray(f.members) && f.members.includes(target.name)) : [];
+        const familyMembers = new Map([...families].map(([name, family]) => [name, membersOf(family)]));
+        const memberNames = target.category === 'families' ? membersOf(object) : [];
+        const memberships = target.category === 'objectTypes' ? [...families].filter(([familyName]) => familyMembers.get(familyName)?.includes(target.name)) : [];
         const declarations = [{ name: target.name, data: object, inherited: false }, ...memberships.map(([name, data]) => ({ name, data, inherited: true }))];
         const behaviors = declarations.flatMap(d => records(d.data.behaviorTypes).map(b => ({ name: text(b.name), addonId: text(b.behaviorId), origin: text(d.name), inherited: d.inherited })));
         const variables = declarations.flatMap(d => records(d.data.instanceVariables).map(v => ({ name: text(v.name), type: text(v.type), origin: text(d.name), inherited: d.inherited })));
@@ -56,21 +75,36 @@ export function registerObjectContextTool(mcpServer: McpServer, reader: Construc
         const placementTypes = new Set(target.category === 'families' ? memberNames : [target.name]);
         const placements: Record<string, unknown>[] = [];
         let placementTotal = 0;
-        for (const [layoutName, layout] of layouts) forEachLayoutInstance(layout, (instance, entry) => {
+        for (const [layoutName, layout] of layouts) {
+          const layers = records(layout.layers, true);
+          for (let i = 0; i < layers.length; i++) {
+            const layer = layers[i];
+            text(layer.name);
+            const instances = records(layer.instances, true);
+            for (const instance of instances) {
+              text(instance.type); identity(instance.uid, 0); identity(instance.sid, 1);
+            }
+            layers.push(...records(layer.subLayers));
+          }
+          for (const instance of records(layout['nonworld-instances'])) {
+            text(instance.type); identity(instance.uid, 0); identity(instance.sid, 1);
+          }
+          forEachLayoutInstance(layout, (instance, entry) => {
           if (!placementTypes.has(instance.type)) return;
           const position = placementTotal++;
           if (position < placementOffset || placements.length >= limit) return;
-          placements.push({ type: text(instance.type), uid: instance.uid, sid: instance.sid,
+          placements.push({ type: text(instance.type), uid: identity(instance.uid, 0), sid: identity(instance.sid, 1),
             layout: text(layoutName), eventSheet: layout.eventSheet ? text(layout.eventSheet) : null,
             kind: entry ? 'world' : 'non-world', layerPath: entry ? layerPath(entry).slice(0, 20).map(text) : [],
             layerPathTruncated: entry ? entry.depth >= 20 : false });
           if (entry && entry.depth >= 20) malformed = true;
-        });
+          });
+        }
         const unscanned = (['families', 'layouts'] as const).flatMap(category => [...reader.getReadFailures(category)].map(([name, failure]) => ({ category, name: text(name), code: failure.code })));
         const bounded = { behaviors: page(behaviors, 50), instanceVariables: page(variables, 50), families: page(memberships.map(([name]) => text(name)), 20), members: page(memberNames.map(text), 20), unscanned: page(unscanned, 20), warnings: page(warnings, 20) };
         const truncated = Object.values(bounded).some(p => p.truncated);
-        return toolResult({
-          object: { name: text(target.name), category: target.category, file: reader.getEntityRelativePath(target.category, target.name), sid: object.sid,
+        const result = {
+          object: { name: text(target.name), category: target.category, file: reader.getEntityRelativePath(target.category, target.name), sid: identity(object.sid, 1),
             pluginId: text(object['plugin-id']), isGlobal: object.isGlobal === true, singleton: Object.hasOwn(object, 'singleglobal-inst') },
           behaviors: bounded.behaviors, instanceVariables: bounded.instanceVariables, families: bounded.families, members: bounded.members,
           placements: { items: placements, total: placementTotal, offset: placementOffset, nextOffset: placementOffset + placements.length < placementTotal ? placementOffset + placements.length : null },
@@ -80,7 +114,9 @@ export function registerObjectContextTool(mcpServer: McpServer, reader: Construc
             scope: 'Declarations and loaded layout placements only; event/script references and runtime selection require separate checks.' },
           nextTools: ['get_object_dependencies', 'get_eventsheet_flow', 'get_eventsheet_outline', 'get_ace_contract', 'validate_project'],
           bindingRule: 'Use object.name as objectClass and the actual behavior name as behaviorType. Query get_ace_contract with the pluginId or behavior addonId; resolve ambiguous names first.',
-        }, { projectWritten: false });
+        };
+        if (Buffer.byteLength(JSON.stringify(result, null, 2)) > 128 * 1024) return toolError('Editing context exceeds 128 KiB. Use a smaller placement limit and inspect declarations with get_object_details.');
+        return toolResult(result, { projectWritten: false });
       } catch (error) { return toolError(`Error reading editing context: ${error instanceof Error ? error.message : String(error)}`); }
     });
 }
