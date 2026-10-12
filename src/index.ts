@@ -25,7 +25,7 @@ import { registerBootstrapTools } from './tools/bootstrap-tools.js';
 const projectPath: string = process.argv[2] || process.env.C3_PROJECT_PATH || process.cwd();
 
 const server = new McpServer(
-  { name: 'construct3-mcp-server', version: '1.8.1' },
+  { name: 'construct3-mcp-server', version: '1.10.0' },
   { capabilities: { resources: {}, tools: {}, prompts: {} } }
 );
 
@@ -78,7 +78,11 @@ async function main() {
     registerMutationTools(server, reader, writer, idGen, knowledge);
 
     // Runtime Control (for live game testing via browser automation)
-    registerRuntimeTools({ server, reader, writer });
+    const runtimeTools = registerRuntimeTools({ server, reader, writer });
+    const stop = () => { void runtimeTools.close().finally(() => process.exit(0)); };
+    process.once('SIGINT', stop);
+    process.once('SIGTERM', stop);
+    process.stdin.once('end', () => { void runtimeTools.close(); });
 
     // Start transport
     const transport = new StdioServerTransport();

@@ -3,13 +3,17 @@
  */
 
 import { z } from 'zod';
-import { readFile, writeFile, rename, unlink } from 'fs/promises';
+import { readFile } from 'fs/promises';
 import type { MutationToolDeps } from './shared.js';
 import type { WriteResult, Addon } from '../construct3/types.js';
 import { toolResult, toolError } from './shared.js';
 import { KNOWN_SCIRRA_PLUGINS, KNOWN_SCIRRA_BEHAVIORS } from '../construct3/templates.js';
+import { jsonTextStyleOf, parseJsonText, serializeJson } from '../construct3/json-format.js';
+import { atomicReplace } from '../construct3/atomic-write.js';
+import { withProjectSync } from './project-sync.js';
 
-export function registerProjectTools({ server, reader, writer }: MutationToolDeps) {
+export function registerProjectTools({ server: mcpServer, reader, writer }: MutationToolDeps) {
+  const server = withProjectSync(mcpServer, reader);
   server.tool(
     'update_project_metadata',
     'Update project metadata (name, version, author, description)',
@@ -94,12 +98,14 @@ export function registerProjectTools({ server, reader, writer }: MutationToolDep
             category: 'addon',
             action: 'already_registered',
             warnings: [`Addon "${args.id}" (${args.type}) is already registered in usedAddons.`],
-          });
+          }, { projectWritten: false });
         }
 
         const projectPath = reader.getProjectPath();
+        // Changed on disk since it was loaded: refused, like the writer's own updates (#51)
+        await writer.assertProjectFileCurrent();
         const content = await readFile(projectPath, 'utf-8');
-        const project = JSON.parse(content);
+        const project = parseJsonText(content);
 
         const newAddon: Addon = {
           type: args.type,
@@ -110,19 +116,7 @@ export function registerProjectTools({ server, reader, writer }: MutationToolDep
         };
         project.usedAddons.push(newAddon);
 
-        const tmpPath = projectPath + '.tmp';
-        await writeFile(tmpPath, JSON.stringify(project, null, '\t'), 'utf-8');
-        try {
-          await rename(tmpPath, projectPath);
-        } catch (e: unknown) {
-          if (e && typeof e === 'object' && 'code' in e && (e as { code: string }).code === 'EEXIST') {
-            await unlink(projectPath);
-            await rename(tmpPath, projectPath);
-          } else {
-            try { await unlink(tmpPath); } catch { /* best-effort */ }
-            throw e;
-          }
-        }
+        await atomicReplace(projectPath, serializeJson(project, jsonTextStyleOf(content)));
         await reader.reloadProject();
 
         const result: WriteResult = {
@@ -164,27 +158,17 @@ export function registerProjectTools({ server, reader, writer }: MutationToolDep
         }
 
         const projectPath = reader.getProjectPath();
+        // Changed on disk since it was loaded: refused, like the writer's own updates (#51)
+        await writer.assertProjectFileCurrent();
         const content = await readFile(projectPath, 'utf-8');
-        const project = JSON.parse(content);
+        const project = parseJsonText(content);
 
         const projIdx = (project.usedAddons as Addon[]).findIndex(a => a.type === args.type && a.id === args.id);
         if (projIdx !== -1) {
           project.usedAddons.splice(projIdx, 1);
         }
 
-        const tmpPath = projectPath + '.tmp';
-        await writeFile(tmpPath, JSON.stringify(project, null, '\t'), 'utf-8');
-        try {
-          await rename(tmpPath, projectPath);
-        } catch (e: unknown) {
-          if (e && typeof e === 'object' && 'code' in e && (e as { code: string }).code === 'EEXIST') {
-            await unlink(projectPath);
-            await rename(tmpPath, projectPath);
-          } else {
-            try { await unlink(tmpPath); } catch { /* best-effort */ }
-            throw e;
-          }
-        }
+        await atomicReplace(projectPath, serializeJson(project, jsonTextStyleOf(content)));
         await reader.reloadProject();
 
         const result: WriteResult = {

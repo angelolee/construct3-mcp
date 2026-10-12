@@ -2,18 +2,37 @@
  * Timeline tools: create_timeline, update_timeline, delete_timeline,
  * list_timelines, get_timeline_details.
  *
- * Timeline JSON files live in projectDir/timelines/<name>.json.
- * The project.c3proj timelines container tracks their names.
- * JSON shape validated against production slot-game projects.
+ * The project.c3proj timelines container tracks their names. Construct 3
+ * mirrors its project-bar folders on disk: a timeline at the root is stored
+ * in timelines/<name>.json, one in folder "A" > "B" in
+ * timelines/A/B/<name>.json. The container's first-level subfolder without a
+ * name is the editor's Transitions folder (see timeline-folders.ts): its items
+ * are transitions (easing curves that timelines reference by name), stored in
+ * timelines/transitions/<name>.json. A nameless folder anywhere else is
+ * malformed: its names are not listed or resolved, and create_timeline
+ * refuses them so they are not registered twice. The timeline tools list
+ * transitions but never read, change or delete them.
+ * JSON shape validated against real Construct 3 projects.
  */
 
 import { z } from 'zod';
-import { readFile, writeFile, mkdir, copyFile, unlink, rename, stat } from 'fs/promises';
-import { join, dirname } from 'path';
+import { readFile, mkdir, copyFile, unlink, stat } from 'fs/promises';
+import { dirname, relative, sep } from 'path';
 import type { MutationToolDeps } from './shared.js';
 import type { WriteResult } from '../construct3/types.js';
-import { validateName, toolResult, toolError } from './shared.js';
+import { newProjectFolder } from '../construct3/project-writer.js';
+import { validateName, validateSubfolder, toolResult, toolError, folderCaseClashError } from './shared.js';
 import { resolveProjectPath } from '../construct3/path-utils.js';
+import { atomicReplace, existingSpelling, findFileIgnoringCase } from '../construct3/atomic-write.js';
+import { findFolderPathClash, nameKey } from '../construct3/names.js';
+import { jsonTextStyleOf, parseJsonText, resolveJsonTextStyle, serializeJson } from '../construct3/json-format.js';
+import {
+  TRANSITIONS_DIR,
+  isNamelessFolder,
+  transitionsFolderIndex,
+  type ProjectFolderNode,
+} from '../construct3/timeline-folders.js';
+import { withProjectSync } from './project-sync.js';
 
 // ─── Timeline Type ─────────────────────────────────────────
 
@@ -119,37 +138,128 @@ function timelineFilePath(projectDir: string, name: string, subfolder?: string):
 
 async function readTimelineFile(filePath: string): Promise<Timeline> {
   const content = await readFile(filePath, 'utf-8');
-  return JSON.parse(content) as Timeline;
+  return parseJsonText(content) as Timeline;
 }
 
-async function atomicWriteTimeline(filePath: string, data: Timeline): Promise<void> {
-  const json = JSON.stringify(data, null, '\t');
-  const tmpPath = filePath + '.tmp';
+/** Write a timeline file atomically; an existing file keeps its name on disk, including its case. */
+async function atomicWriteTimeline(filePath: string, data: Timeline, projectPath: string): Promise<void> {
   await mkdir(dirname(filePath), { recursive: true });
-  await writeFile(tmpPath, json, 'utf-8');
-  try {
-    await rename(tmpPath, filePath);
-  } catch (e: unknown) {
-    if (e && typeof e === 'object' && 'code' in e && (e as { code: string }).code === 'EEXIST') {
-      await unlink(filePath);
-      await rename(tmpPath, filePath);
-    } else {
-      try { await unlink(tmpPath); } catch { /* best-effort */ }
-      throw e;
-    }
-  }
+  const target = await existingSpelling(filePath);
+  // Keep the existing file's text style; a new file follows the project's
+  const json = serializeJson(data, await resolveJsonTextStyle(target, projectPath, dirname(target)));
+  await atomicReplace(target, json);
 }
 
-async function backupTimeline(filePath: string): Promise<string> {
+/**
+ * Copy a file to <file>.bak, named after the file as spelled on disk. Returns
+ * the backup path, or undefined when the file does not exist (nothing to back
+ * up). A failed copy throws.
+ */
+async function backupTimeline(path: string): Promise<string | undefined> {
+  const filePath = await existingSpelling(path);
   const bak = filePath + '.bak';
   try {
     await stat(filePath);
-    await copyFile(filePath, bak);
   } catch (e: unknown) {
-    if (e && typeof e === 'object' && 'code' in e && (e as { code: string }).code === 'ENOENT') return bak;
+    if (e && typeof e === 'object' && 'code' in e && (e as { code: string }).code === 'ENOENT') return undefined;
     throw e;
   }
+  await copyFile(filePath, bak);
   return bak;
+}
+
+// ─── Locating timeline files ───────────────────────────────
+
+interface TimelineLocation {
+  kind: 'timeline' | 'transition';
+  /** Named project-bar folders from the timelines root, outermost first. */
+  folders: string[];
+}
+
+type TimelineFolderNode = ProjectFolderNode;
+
+function folderItems(folder: TimelineFolderNode): string[] {
+  return Array.isArray(folder.items) ? folder.items.filter((i): i is string => typeof i === 'string') : [];
+}
+
+function folderSubfolders(folder: TimelineFolderNode): TimelineFolderNode[] {
+  return Array.isArray(folder.subfolders) ? folder.subfolders as TimelineFolderNode[] : [];
+}
+
+/** Every item name in a folder and all its subfolders. */
+function allFolderItems(folder: TimelineFolderNode, into: Set<string>, depth = 0): void {
+  if (depth > 50) return;
+  for (const item of folderItems(folder)) into.add(item);
+  for (const sub of folderSubfolders(folder)) allFolderItems(sub, into, depth + 1);
+}
+
+/**
+ * Map every name in the project.c3proj timelines container to where it lives,
+ * in project-bar order. Timelines and transitions are kept apart. Names the
+ * tools cannot resolve to a file are collected in `unresolved`: those in a
+ * nameless folder other than the Transitions folder (malformed, reported by
+ * validate_project) and those in folders inside the Transitions folder.
+ */
+function locateTimelines(container: TimelineFolderNode | undefined): {
+  timelines: Map<string, TimelineLocation>;
+  transitions: Map<string, TimelineLocation>;
+  unresolved: Set<string>;
+} {
+  const timelines = new Map<string, TimelineLocation>();
+  const transitions = new Map<string, TimelineLocation>();
+  const unresolved = new Set<string>();
+  const transitionsFolder = container ? folderSubfolders(container)[transitionsFolderIndex(container)] : undefined;
+  const walk = (folder: TimelineFolderNode, folders: string[]) => {
+    for (const item of folderItems(folder)) {
+      if (!timelines.has(item)) timelines.set(item, { kind: 'timeline', folders });
+    }
+    for (const sub of folderSubfolders(folder)) {
+      if (sub === transitionsFolder) {
+        for (const item of folderItems(sub)) {
+          if (!transitions.has(item)) transitions.set(item, { kind: 'transition', folders: [] });
+        }
+        for (const inner of folderSubfolders(sub)) allFolderItems(inner, unresolved);
+      } else if (!isNamelessFolder(sub)) {
+        walk(sub, [...folders, sub.name as string]);
+      } else {
+        allFolderItems(sub, unresolved);
+      }
+    }
+  };
+  if (container) walk(container, []);
+  return { timelines, transitions, unresolved };
+}
+
+function unresolvedRefusal(name: string): string {
+  return `"${name}" is registered in project.c3proj in a timelines folder the timeline tools cannot resolve: ` +
+    'a folder without a name that is not the editor\'s Transitions folder (only the first unnamed folder directly under timelines is), ' +
+    'or a folder inside the Transitions folder. Run validate_project and fix the folder in project.c3proj first.';
+}
+
+/** Folders below timelines/ that hold the file for this location. */
+function locationDirs(location: TimelineLocation): string[] {
+  return location.kind === 'transition' ? [TRANSITIONS_DIR] : location.folders;
+}
+
+/** Absolute path of the file for a located name, confined to timelines/. */
+function locatedFilePath(projectDir: string, name: string, location: TimelineLocation): string {
+  const timelinesDir = resolveProjectPath(projectDir, 'timelines');
+  return resolveProjectPath(timelinesDir, ...locationDirs(location), `${name}.json`);
+}
+
+/** Project-relative path of the file for a located name, for messages. */
+function locatedFileLabel(name: string, location: TimelineLocation): string {
+  return ['timelines', ...locationDirs(location), `${name}.json`].join('/');
+}
+
+/** Whether two project-bar folder paths are the same folder (names compared ignoring case). */
+function sameFolders(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((folder, i) => nameKey(folder) === nameKey(b[i]));
+}
+
+function transitionRefusal(name: string): string {
+  return `"${name}" is a transition (an easing curve in timelines/${TRANSITIONS_DIR}/), not a timeline. ` +
+    'The timeline tools do not read, change or delete transitions; edit them in the Construct 3 editor.';
 }
 
 /** Add a timeline name to project.c3proj timelines container. */
@@ -159,7 +269,7 @@ async function addTimelineToProject(
   subfolder?: string,
 ): Promise<void> {
   const content = await readFile(projectPath, 'utf-8');
-  const project = JSON.parse(content);
+  const project = parseJsonText(content);
 
   if (!project.timelines) project.timelines = { items: [], subfolders: [] };
   const container = project.timelines;
@@ -171,7 +281,8 @@ async function addTimelineToProject(
     for (const part of parts) {
       let found = (cur.subfolders as TFolder[]).find(sf => sf.name === part);
       if (!found) {
-        found = { name: part, items: [], subfolders: [] };
+        // Same key order as the editor writes (items, subfolders, name)
+        found = newProjectFolder(part);
         cur.subfolders.push(found);
       }
       cur = found;
@@ -181,88 +292,46 @@ async function addTimelineToProject(
     if (!container.items.includes(name)) container.items.push(name);
   }
 
-  const tmpPath = projectPath + '.tmp';
-  await writeFile(tmpPath, JSON.stringify(project, null, '\t'), 'utf-8');
-  try {
-    await rename(tmpPath, projectPath);
-  } catch (e: unknown) {
-    if (e && typeof e === 'object' && 'code' in e && (e as { code: string }).code === 'EEXIST') {
-      await unlink(projectPath);
-      await rename(tmpPath, projectPath);
-    } else {
-      try { await unlink(tmpPath); } catch { /* best-effort */ }
-      throw e;
-    }
-  }
+  await atomicReplace(projectPath, serializeJson(project, jsonTextStyleOf(content)));
 }
 
-/** Remove a timeline name from project.c3proj timelines container. */
-async function removeTimelineFromProject(projectPath: string, name: string): Promise<void> {
+/**
+ * Remove a timeline name from the project.c3proj timelines container, from
+ * exactly the named folder it was located in (never from the Transitions folder).
+ */
+async function removeTimelineFromProject(projectPath: string, name: string, folders: string[]): Promise<void> {
   const content = await readFile(projectPath, 'utf-8');
-  const project = JSON.parse(content);
+  const project = parseJsonText(content);
 
-  if (!project.timelines) return;
-  const container = project.timelines;
-
-  // Remove from root
-  const idx = container.items.indexOf(name);
-  if (idx !== -1) {
-    container.items.splice(idx, 1);
-  } else {
-    // Search subfolders recursively
-    const removeFromSubfolders = (subfolders: Array<{ name: string; items: string[]; subfolders: unknown[] }>): boolean => {
-      for (const sf of subfolders) {
-        const i = sf.items.indexOf(name);
-        if (i !== -1) { sf.items.splice(i, 1); return true; }
-        if (removeFromSubfolders(sf.subfolders as Array<{ name: string; items: string[]; subfolders: unknown[] }>)) return true;
-      }
-      return false;
-    };
-    removeFromSubfolders(container.subfolders);
+  let folder: TimelineFolderNode | undefined = project.timelines;
+  for (const folderName of folders) {
+    folder = folder && folderSubfolders(folder).find(sf => !isNamelessFolder(sf) && sf.name === folderName);
   }
-
-  const tmpPath = projectPath + '.tmp';
-  await writeFile(tmpPath, JSON.stringify(project, null, '\t'), 'utf-8');
-  try {
-    await rename(tmpPath, projectPath);
-  } catch (e: unknown) {
-    if (e && typeof e === 'object' && 'code' in e && (e as { code: string }).code === 'EEXIST') {
-      await unlink(projectPath);
-      await rename(tmpPath, projectPath);
-    } else {
-      try { await unlink(tmpPath); } catch { /* best-effort */ }
-      throw e;
-    }
+  const items = folder && Array.isArray(folder.items) ? folder.items as unknown[] : [];
+  const idx = items.indexOf(name);
+  if (idx === -1) {
+    throw new Error(`"${name}" is not registered in ${['timelines', ...folders].join('/')} of project.c3proj`);
   }
-}
+  items.splice(idx, 1);
 
-/** Collect all timeline names from a timelines container (root + all subfolders). */
-function collectTimelineNames(container: { items: string[]; subfolders: unknown[] }): string[] {
-  const names: string[] = [...container.items];
-  const walk = (subfolders: unknown[]) => {
-    for (const sf of subfolders as Array<{ items: string[]; subfolders: unknown[] }>) {
-      names.push(...sf.items);
-      walk(sf.subfolders);
-    }
-  };
-  walk(container.subfolders);
-  return names;
+  await atomicReplace(projectPath, serializeJson(project, jsonTextStyleOf(content)));
 }
 
 // ─── Registration ──────────────────────────────────────────
 
-export function registerTimelineTools({ server, reader, writer }: MutationToolDeps) {
+export function registerTimelineTools({ server: mcpServer, reader, writer }: MutationToolDeps) {
+  const server = withProjectSync(mcpServer, reader);
   // ─── list_timelines ───────────────────────────────────────
 
   server.tool(
     'list_timelines',
-    'List all timelines in the project',
+    'List all timelines in the project (root and subfolders). Transitions (easing curves) are listed separately.',
     {},
     async () => {
       try {
-        const project = reader.getProject();
-        const names = collectTimelineNames(project.timelines);
-        return toolResult({ timelines: names, count: names.length });
+        const { timelines, transitions } = locateTimelines(reader.getProject().timelines);
+        const names = [...timelines.keys()];
+        return toolResult({ timelines: names, count: names.length, transitions: [...transitions.keys()] });
       } catch (error) {
         console.error('[list_timelines] failed:', error);
         return toolError(`Error listing timelines: ${error instanceof Error ? error.message : String(error)}`);
@@ -280,25 +349,22 @@ export function registerTimelineTools({ server, reader, writer }: MutationToolDe
     },
     async (args) => {
       try {
-        const project = reader.getProject();
-        const names = collectTimelineNames(project.timelines);
-        if (!names.includes(args.name)) {
+        const { timelines, transitions, unresolved } = locateTimelines(reader.getProject().timelines);
+        const location = timelines.get(args.name) ?? transitions.get(args.name);
+        if (!location) {
+          if (unresolved.has(args.name)) return toolError(unresolvedRefusal(args.name));
+          const names = [...timelines.keys()];
           const hint = names.length > 0 ? `\nAvailable timelines: ${names.slice(0, 5).join(', ')}` : '\nNo timelines found in this project.';
           return toolError(`Timeline "${args.name}" not found.${hint}`);
         }
+        if (location.kind === 'transition') return toolError(transitionRefusal(args.name));
 
-        const filePath = timelineFilePath(reader.getProjectDir(), args.name);
+        const filePath = locatedFilePath(reader.getProjectDir(), args.name, location);
         let data: Timeline;
         try {
           data = await readTimelineFile(filePath);
-        } catch {
-          // Try transitions subfolder
-          const transPath = timelineFilePath(reader.getProjectDir(), args.name, 'transitions');
-          try {
-            data = await readTimelineFile(transPath);
-          } catch {
-            return toolError(`Timeline "${args.name}" is registered in the project but its file could not be read.`);
-          }
+        } catch (e) {
+          return toolError(`Timeline "${args.name}" is registered in the project but its file ${locatedFileLabel(args.name, location)} could not be read: ${e instanceof Error ? e.message : String(e)}`);
         }
 
         return toolResult(data);
@@ -322,16 +388,52 @@ export function registerTimelineTools({ server, reader, writer }: MutationToolDe
       repeatCount: z.number().int().min(1).optional().default(1).describe('Repeat count when not looping (default: 1)'),
       startOnLayout: z.string().max(200).optional().default('').describe('Layout name to auto-start on (default: empty = no auto-start)'),
       ignoreSystemTimescale: z.boolean().optional().default(true).describe('Ignore system timescale (default: true)'),
-      subfolder: z.string().max(500).optional().describe('Subfolder within timelines/ (e.g. "transitions")'),
+      subfolder: z.string().max(500).optional().describe('Project-bar folder within timelines/, "/"-separated (e.g. "UI" or "UI/Menus"). Not "transitions": Construct 3 keeps transitions there.'),
     },
     async (args) => {
       try {
         validateName(args.name);
+        if (args.subfolder) {
+          validateSubfolder(args.subfolder);
+          if (args.subfolder.split('/')[0].toLowerCase() === TRANSITIONS_DIR) {
+            return toolError(`Subfolder "${args.subfolder}" is not allowed: Construct 3 stores transitions in timelines/${TRANSITIONS_DIR}/. Choose another folder name.`);
+          }
+        }
 
-        const project = reader.getProject();
-        const existing = collectTimelineNames(project.timelines);
-        if (existing.includes(args.name)) {
+        const container = reader.getProject().timelines;
+        const { timelines, transitions, unresolved } = locateTimelines(container);
+        if (timelines.has(args.name)) {
           return toolError(`Timeline "${args.name}" already exists.`);
+        }
+        if (transitions.has(args.name)) {
+          return toolError(`A transition named "${args.name}" already exists. Choose another timeline name.`);
+        }
+        if (unresolved.has(args.name)) {
+          return toolError(`${unresolvedRefusal(args.name)} Creating it again would register the name twice.`);
+        }
+        if (args.subfolder) {
+          const folderClash = findFolderPathClash(container, args.subfolder);
+          if (folderClash) return toolError(folderCaseClashError(args.subfolder, folderClash));
+        }
+
+        // The editor compares timeline names exactly (projectResources.js r495.2),
+        // so a case variant in another folder is allowed, with a note. In the same
+        // folder both would be stored in one file on Windows and macOS.
+        const folders = args.subfolder ? args.subfolder.split('/') : [];
+        const warnings: string[] = [];
+        for (const [existing, location] of [...timelines, ...transitions]) {
+          if (nameKey(existing) !== nameKey(args.name)) continue;
+          const existingFile = locatedFileLabel(existing, location);
+          if (location.kind === 'timeline' && sameFolders(location.folders, folders)) {
+            return toolError(
+              `"${args.name}" differs only in case from the existing timeline "${existing}" in the same folder. ` +
+              `On Windows and macOS both names are the same file (${existingFile}), which creating this timeline would overwrite. Choose a different name.`,
+            );
+          }
+          warnings.push(
+            `"${args.name}" differs only in case from the existing ${location.kind} "${existing}" (${existingFile}). ` +
+            'Construct 3 compares timeline names exactly and the files are in different folders, so both are kept.',
+          );
         }
 
         const data = createTimeline(args.name, args.totalTime);
@@ -341,9 +443,20 @@ export function registerTimelineTools({ server, reader, writer }: MutationToolDe
         data.startOnLayout = args.startOnLayout;
         data.ignoreSystemTimescale = args.ignoreSystemTimescale;
 
+        // Never replace a file on create, also not one whose name differs only in case
         const filePath = timelineFilePath(reader.getProjectDir(), args.name, args.subfolder);
-        const backupPath = await backupTimeline(filePath);
-        await atomicWriteTimeline(filePath, data);
+        const onDisk = await findFileIgnoringCase(filePath);
+        if (onDisk) {
+          const label = relative(reader.getProjectDir(), onDisk).split(sep).join('/');
+          return toolError(
+            `The file ${label} already exists: it is not a registered timeline, or it is registered under a name ` +
+            'that differs only in case. It was left unchanged. Choose another name, or, if the file is a leftover of a ' +
+            'deleted timeline, check it and remove it first.',
+          );
+        }
+        // project.c3proj changed on disk since it was loaded: refused before any write (#51)
+        await writer.assertProjectFileCurrent();
+        await atomicWriteTimeline(filePath, data, reader.getProjectPath());
 
         // Register in project.c3proj (under lock via withProjectLock is internal to writer;
         // we use writer.addToProject which handles the lock — but timelines isn't a standard category.
@@ -358,7 +471,7 @@ export function registerTimelineTools({ server, reader, writer }: MutationToolDe
           entity: args.name,
           category: 'timeline',
           action: 'created',
-          backupFile: backupPath,
+          warnings: warnings.length > 0 ? warnings : undefined,
         };
         return toolResult(result);
       } catch (error) {
@@ -394,23 +507,21 @@ export function registerTimelineTools({ server, reader, writer }: MutationToolDe
           return toolError('No updates provided. Specify at least one of: totalTime, loop, pingPong, repeatCount, startOnLayout, ignoreSystemTimescale, enabled.');
         }
 
-        const project = reader.getProject();
-        const names = collectTimelineNames(project.timelines);
-        if (!names.includes(args.name)) {
+        const { timelines, transitions, unresolved } = locateTimelines(reader.getProject().timelines);
+        const location = timelines.get(args.name) ?? transitions.get(args.name);
+        if (!location) {
+          if (unresolved.has(args.name)) return toolError(unresolvedRefusal(args.name));
           return toolError(`Timeline "${args.name}" not found. Use list_timelines to see available timelines.`);
         }
+        if (location.kind === 'transition') return toolError(transitionRefusal(args.name));
 
-        const filePath = timelineFilePath(reader.getProjectDir(), args.name);
+        // Read and write back the one file the timeline is stored in
+        const filePath = locatedFilePath(reader.getProjectDir(), args.name, location);
         let data: Timeline;
         try {
           data = await readTimelineFile(filePath);
-        } catch {
-          const transPath = timelineFilePath(reader.getProjectDir(), args.name, 'transitions');
-          try {
-            data = await readTimelineFile(transPath);
-          } catch {
-            return toolError(`Timeline "${args.name}" file could not be read.`);
-          }
+        } catch (e) {
+          return toolError(`Timeline "${args.name}" file ${locatedFileLabel(args.name, location)} could not be read: ${e instanceof Error ? e.message : String(e)}`);
         }
 
         if (args.totalTime !== undefined) data.totalTime = args.totalTime;
@@ -422,7 +533,7 @@ export function registerTimelineTools({ server, reader, writer }: MutationToolDe
         if (args.enabled !== undefined) data.enabled = args.enabled;
 
         const backupPath = await backupTimeline(filePath);
-        await atomicWriteTimeline(filePath, data);
+        await atomicWriteTimeline(filePath, data, reader.getProjectPath());
 
         const result: WriteResult = {
           success: true,
@@ -443,34 +554,38 @@ export function registerTimelineTools({ server, reader, writer }: MutationToolDe
 
   server.tool(
     'delete_timeline',
-    'Delete a timeline from the project',
+    'Delete a timeline: backs up its file to <file>.bak, deletes the file and removes the timeline from project.c3proj',
     {
       name: z.string().max(200).describe('Timeline name to delete'),
     },
     async (args) => {
       try {
-        const project = reader.getProject();
-        const names = collectTimelineNames(project.timelines);
-        if (!names.includes(args.name)) {
+        const { timelines, transitions, unresolved } = locateTimelines(reader.getProject().timelines);
+        const location = timelines.get(args.name) ?? transitions.get(args.name);
+        if (!location) {
+          if (unresolved.has(args.name)) return toolError(unresolvedRefusal(args.name));
           return toolError(`Timeline "${args.name}" not found. Use list_timelines to see available timelines.`);
         }
+        if (location.kind === 'transition') return toolError(transitionRefusal(args.name));
 
-        const filePath = timelineFilePath(reader.getProjectDir(), args.name);
+        // project.c3proj changed on disk since it was loaded: refused before any change (#51)
+        await writer.assertProjectFileCurrent();
+        // Back up exactly the file that is deleted; a failed backup or delete aborts
+        const filePath = locatedFilePath(reader.getProjectDir(), args.name, location);
+        const fileLabel = locatedFileLabel(args.name, location);
         const backupPath = await backupTimeline(filePath);
-
-        try {
-          await unlink(filePath);
-        } catch (e: unknown) {
-          // Try transitions subfolder
-          if (e && typeof e === 'object' && 'code' in e && (e as { code: string }).code === 'ENOENT') {
-            const transPath = timelineFilePath(reader.getProjectDir(), args.name, 'transitions');
-            try { await unlink(transPath); } catch { /* already gone */ }
-          }
+        if (!backupPath) {
+          return toolError(`Timeline "${args.name}" is registered in project.c3proj, but its file ${fileLabel} was not found. Nothing was deleted and project.c3proj was not changed.`);
         }
+        await unlink(filePath);
 
         const projectPath = reader.getProjectPath();
-        await backupTimeline(projectPath);
-        await removeTimelineFromProject(projectPath, args.name);
+        try {
+          await backupTimeline(projectPath);
+          await removeTimelineFromProject(projectPath, args.name, location.folders);
+        } catch (e) {
+          return toolError(`Deleted ${fileLabel} (backup: ${backupPath}), but could not remove "${args.name}" from project.c3proj: ${e instanceof Error ? e.message : String(e)}`);
+        }
         await reader.reloadProject();
 
         const result: WriteResult = {

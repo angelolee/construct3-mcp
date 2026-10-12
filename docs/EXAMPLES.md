@@ -23,11 +23,11 @@ Real-world examples of using the Construct3 MCP Server with Claude.
 > "Are you connected to my Construct 3 project?"
 
 **Response:**
-> Yes! I'm connected to your project "Bonny's Fortune" (version 0.2.6). The project has:
-> - 442 object types
-> - 17 event sheets
-> - 7 layouts
-> - 14 families
+> Yes! I'm connected to your project "My Game" (version 1.0.0). The project has:
+> - 48 object types
+> - 6 event sheets
+> - 4 layouts
+> - 3 families
 >
 > Would you like me to analyze any specific aspect?
 
@@ -140,7 +140,7 @@ Real-world examples of using the Construct3 MCP Server with Claude.
 ### Add Variables and Behaviors to an Object
 
 **Query:**
-> "Add a health variable (number, default 100) and a Tween behavior to the Enemy object"
+> "Add a number instance variable health and a Tween behavior to the Enemy object"
 
 **Claude uses**: `update_object_properties` with:
 ```json
@@ -156,6 +156,8 @@ Real-world examples of using the Construct3 MCP Server with Claude.
 2. Validates "Tween" behavior is in `usedAddons` (auto-registers if known Scirra)
 3. Generates unique SIDs for the new variable and behavior
 4. Writes updated object back with backup
+
+`addVariables` takes a name and a type only; `update_object_properties` cannot set a variable's initial value.
 
 ### Create an Event Sheet with Includes
 
@@ -285,16 +287,25 @@ Returns an error — the startup layout cannot be deleted.
 
 **Claude uses**: `delete_object` with `name: "Enemy"`
 
-**If referenced** (e.g., placed on LevelSelect layout):
+**If referenced** (e.g., a condition in the Game event sheet, and two instances on the sub-layer Enemies of the layer Main in the LevelSelect layout):
 ```json
 {
   "success": false,
+  "entity": "Enemy",
+  "category": "object",
   "action": "delete_blocked",
-  "message": "Object is still referenced. Use force=true to delete anyway.",
+  "message": "Object is still referenced: used 1 time(s) in events of \"Game\" (1 condition object); 2 instance(s) in layout \"LevelSelect\" (layer \"Main > Enemies\"). Use force=true to delete anyway (references will NOT be cleaned up).",
   "references": {
-    "eventSheets": [],
+    "eventSheets": ["Game"],
     "layouts": ["LevelSelect"],
-    "families": []
+    "families": [],
+    "events": [
+      { "eventSheet": "Game", "path": "block > condition:0", "context": "condition" }
+    ],
+    "instances": [
+      { "layout": "LevelSelect", "layer": "Main > Enemies", "instances": 2 }
+    ],
+    "instanceProperties": []
   }
 }
 ```
@@ -302,14 +313,14 @@ Returns an error — the startup layout cannot be deleted.
 **Force delete:**
 > "Force delete Enemy even though it's referenced"
 
-Returns success with a warning that references were NOT cleaned up.
+Returns success with a warning that names the remaining uses (references are NOT cleaned up). Afterwards `validate_project` reports the leftover instances, object parameters and family memberships as `broken-object-reference`; uses in expressions, scripts and *Create object (by name)* are not reported, and a second warning of the delete lists them. The object's image files are kept as `.bak`.
 
 ### Update Project Metadata
 
 **Query:**
-> "Set the project version to 1.1.0 and author to My Studio"
+> "Set the project version to 1.1.0 and author to Example Games"
 
-**Claude uses**: `update_project_metadata` with `version: "1.1.0"`, `author: "My Studio"`
+**Claude uses**: `update_project_metadata` with `version: "1.1.0"`, `author: "Example Games"`
 
 ---
 
@@ -331,7 +342,7 @@ Returns success with a warning that references were NOT cleaned up.
     {
       "id": "set-instvar-value",
       "objectClass": "Player",
-      "parameters": { "variable": "health", "value": "100" }
+      "parameters": { "instance-variable": "health", "value": "100" }
     }
   ]
 }
@@ -353,7 +364,7 @@ Returns success with a warning that references were NOT cleaned up.
     {
       "id": "simulate-control",
       "objectClass": "Player",
-      "behavior-type": "Platform",
+      "behaviorType": "Platform",
       "parameters": { "control": "jump" }
     }
   ]
@@ -381,7 +392,7 @@ Returns success with a warning that references were NOT cleaned up.
     {
       "id": "set-instvar-value",
       "objectClass": "Enemy",
-      "parameters": { "variable": "health", "value": "Enemy.health - 10" }
+      "parameters": { "instance-variable": "health", "value": "Enemy.health - 10" }
     }
   ]
 }
@@ -415,7 +426,7 @@ Returns success with a warning that references were NOT cleaned up.
     {
       "id": "subtract-from-instvar",
       "objectClass": "Player",
-      "parameters": { "variable": "health", "value": "1" }
+      "parameters": { "instance-variable": "health", "value": "1" }
     }
   ]
 }
@@ -438,6 +449,7 @@ Returns success with a warning that references were NOT cleaned up.
   ]
 }
 ```
+The script is written the way the editor saves it: `{ "type": "script", "language": "javascript", "script": ["console.log('Game started');"] }`, one array entry per line. `script` may also be passed as that array.
 
 ### Sub-Event (Nested Block)
 
@@ -459,7 +471,7 @@ Returns success with a warning that references were NOT cleaned up.
     {
       "id": "subtract-from-instvar",
       "objectClass": "Enemy",
-      "parameters": { "variable": "health", "value": "10" }
+      "parameters": { "instance-variable": "health", "value": "10" }
     }
   ],
   "children": [
@@ -468,7 +480,7 @@ Returns success with a warning that references were NOT cleaned up.
         {
           "id": "compare-instance-variable",
           "objectClass": "Enemy",
-          "parameters": { "variable": "health", "comparison": "≤", "value": "0" }
+          "parameters": { "instance-variable": "health", "comparison": 3, "value": "0" }
         }
       ],
       "actions": [
@@ -479,59 +491,91 @@ Returns success with a warning that references were NOT cleaned up.
 }
 ```
 
+Parameter keys are the ones Construct 3 saves: instance variable conditions and actions use `"instance-variable"` (the reference checks of `update_object_properties` and `validate_project` only recognise that key; System event variable ACEs use `"variable"`). The comparison operator is a number: `0` is *equal to*, as in editor-saved sheets; the others follow Construct's comparison order (`1` not equal, `2` less, `3` less or equal, `4` greater, `5` greater or equal), which was not checked in the editor for this document. The server does not validate parameter keys or operator values, so if in doubt build one such condition in the editor and read it with `get_eventsheet_details`.
+
 ### Else Block
 
 **Query:**
-> "If score >= 100, show the WinText. Otherwise, show the TryAgainText."
+> "At the start of the layout: if score >= 100, show the WinText. Otherwise, show the TryAgainText."
+
+An else block belongs after the block it is the else of, at the same level (only comments may stand between them). Else can only follow a normal (non-triggered) event, so here both are sub-events of the trigger rather than an else after the trigger itself.
 
 **Claude uses**: `add_event_block` with:
 ```json
 {
   "sheetName": "GameSheet",
   "conditions": [
-    {
-      "id": "compare-instance-variable",
-      "objectClass": "Player",
-      "parameters": { "variable": "score", "comparison": "≥", "value": "100" }
-    }
-  ],
-  "actions": [
-    { "id": "set-visible", "objectClass": "WinText", "parameters": { "visible": true } }
+    { "id": "on-start-of-layout", "objectClass": "System" }
   ],
   "children": [
     {
+      "conditions": [
+        {
+          "id": "compare-instance-variable",
+          "objectClass": "Player",
+          "parameters": { "instance-variable": "score", "comparison": 5, "value": "100" }
+        }
+      ],
+      "actions": [
+        { "id": "set-visible", "objectClass": "WinText", "parameters": { "visibility": "visible" } }
+      ]
+    },
+    {
       "isElse": true,
       "actions": [
-        { "id": "set-visible", "objectClass": "TryAgainText", "parameters": { "visible": true } }
+        { "id": "set-visible", "objectClass": "TryAgainText", "parameters": { "visibility": "visible" } }
       ]
     }
   ]
 }
 ```
+`isElse` is written the way Construct 3 saves Else: a System condition `{ "id": "else", "objectClass": "System", "sid": ... }` first in the else block's `conditions`. Conditions given together with `isElse` follow it and make an else-if.
 
-### OR Condition
+### Either of Two Triggers
 
 **Query:**
 > "When the player presses Space OR presses the up arrow, jump"
+
+Construct 3 allows one trigger per event, except in an OR block, which may hold several. `isOrBlock: true` makes one.
 
 **Claude uses**: `add_event_block` with:
 ```json
 {
   "sheetName": "PlayerControls",
+  "isOrBlock": true,
   "conditions": [
-    { "id": "on-key-pressed", "objectClass": "Keyboard", "parameters": { "key": "32" } },
-    { "id": "on-key-pressed", "objectClass": "Keyboard", "parameters": { "key": "38" }, "isOr": true }
+    { "id": "on-key-pressed", "objectClass": "Keyboard", "parameters": { "key": 32 } },
+    { "id": "on-key-pressed", "objectClass": "Keyboard", "parameters": { "key": 38 } }
   ],
   "actions": [
     {
       "id": "simulate-control",
       "objectClass": "Player",
-      "behavior-type": "Platform",
+      "behaviorType": "Platform",
       "parameters": { "control": "jump" }
     }
   ]
 }
 ```
+
+### Function Call
+
+**Query:**
+> "On start of layout, call the SpawnWave function with wave 1 and boss mode off"
+
+**Claude uses**: `add_event_block` with:
+```json
+{
+  "sheetName": "GameSheet",
+  "conditions": [
+    { "id": "on-start-of-layout", "objectClass": "System" }
+  ],
+  "actions": [
+    { "callFunction": "SpawnWave", "parameters": ["1", false] }
+  ]
+}
+```
+Arguments follow the order of the function's parameters: expressions as strings, `true`/`false` for boolean parameters. It is written as `{ "callFunction": "SpawnWave", "sid": ..., "parameters": ["1", false] }`, without `id`/`objectClass`, as the editor saves calls.
 
 ### Disabled Action
 
@@ -549,12 +593,12 @@ Returns success with a warning that references were NOT cleaned up.
     {
       "id": "set-instvar-value",
       "objectClass": "Player",
-      "parameters": { "variable": "health", "value": "100" }
+      "parameters": { "instance-variable": "health", "value": "100" }
     },
     {
       "id": "set-instvar-value",
       "objectClass": "Player",
-      "parameters": { "variable": "health", "value": "999" },
+      "parameters": { "instance-variable": "health", "value": "999" },
       "disabled": true
     }
   ]
@@ -605,7 +649,7 @@ Returns success with a warning that references were NOT cleaned up.
 ### Find Object Usage
 
 **Query:**
-> "Where is the spin_btn object used?"
+> "Where is the pause_btn object used?"
 
 **Claude uses**: `find_object_usage` prompt + `get_object_dependencies`
 
@@ -623,7 +667,7 @@ Returns success with a warning that references were NOT cleaned up.
 ### Explain Event Sheet
 
 **Query:**
-> "Explain how the SpinMachine event sheet works"
+> "Explain how the PlayerControls event sheet works"
 
 **Claude uses**: `explain_eventsheet` prompt + `get_eventsheet_details`
 

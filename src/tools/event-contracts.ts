@@ -1,9 +1,10 @@
 import type { Construct3ProjectReader } from '../construct3/project-reader.js';
 import type { KnowledgeBase } from '../knowledge/base.js';
-import { getProjectIndex } from '../construct3/analyzers/index-builder.js';
-import { getBehaviorType, MAX_ITEMS_PER_BLOCK, MAX_NESTING_DEPTH, MAX_TOTAL_EVENTS } from './event-helpers.js';
+import { functionsObjectName, FUNCTIONS_OBJECT_ACTION_IDS } from '../construct3/event-shapes.js';
+import { loadFunctionSignatures, resolveBehaviorType, MAX_ITEMS_PER_BLOCK, MAX_NESTING_DEPTH, MAX_TOTAL_EVENTS } from './event-helpers.js';
 
 interface ContractBlock {
+  eventType?: string;
   conditions?: readonly Record<string, unknown>[];
   actions?: readonly Record<string, unknown>[];
   children?: readonly ContractBlock[];
@@ -15,8 +16,10 @@ export async function validateEventContracts(
   block: ContractBlock,
 ): Promise<void> {
   const families = await reader.readAllFamilies();
+  const functionsName = functionsObjectName(reader);
   const stack = [{ block, depth: 1 }];
   const contracts = new Map<string, Awaited<ReturnType<KnowledgeBase['query']>>>();
+  let functions: Awaited<ReturnType<typeof loadFunctionSignatures>> | undefined;
   let count = 0;
   while (stack.length) {
     const current = stack.pop()!;
@@ -25,29 +28,36 @@ export async function validateEventContracts(
       const items = current.block[kind] ?? [];
       if (items.length > MAX_ITEMS_PER_BLOCK) throw new Error(`Too many ${kind} for contract validation`);
       for (const item of items) {
-        if (kind === 'actions' && item.type === 'script') continue;
+        if (kind === 'actions' && (item.type === 'script' || item.type === 'comment')) continue;
         if (typeof item.callFunction === 'string') {
-          const index = await getProjectIndex(reader);
           if (kind !== 'actions' || item.id !== undefined || item.objectClass !== undefined || item.behaviorType !== undefined || item['behavior-type'] !== undefined) {
             throw new Error('Function call must use callFunction and ordered parameters without an ACE owner, ID or behavior');
           }
-          const definition = index.functionDefinitions.get(item.callFunction);
+          functions ??= await loadFunctionSignatures(reader);
+          const definition = functions.get(item.callFunction.toLowerCase());
           if (!definition) throw new Error(`Unknown function "${item.callFunction}"`);
           const parameters = item.parameters ?? [];
           if (!Array.isArray(parameters) || parameters.length !== definition.params.length) throw new Error(`Function call "${item.callFunction}" requires ${definition.params.length} ordered arguments`);
-          for (const value of parameters) {
-            if (!(typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value)))) throw new Error('Function call arguments require expression strings or finite numbers');
+          for (const [index, value] of parameters.entries()) {
+            if (definition.params[index].type === 'boolean') {
+              if (typeof value !== 'boolean') throw new Error(`Function parameter "${definition.params[index].name}" requires a JSON boolean`);
+            } else if (!(typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value)))) {
+              throw new Error('Function call arguments require expression strings or finite numbers for non-boolean parameters');
+            }
           }
           continue;
         }
         if (typeof item.id !== 'string' || typeof item.objectClass !== 'string') throw new Error('ACE must have an id and objectClass');
-        const behavior = getBehaviorType({
-          behaviorType: item.behaviorType as string | undefined,
-          'behavior-type': item['behavior-type'] as string | undefined,
-        });
+        if (item.objectClass === functionsName && (kind !== 'actions' || !FUNCTIONS_OBJECT_ACTION_IDS.has(item.id))) {
+          throw new Error(`No verified ${kind} contract for built-in ${functionsName}/${item.id}`);
+        }
+        if (item.objectClass === 'System' && FUNCTIONS_OBJECT_ACTION_IDS.has(item.id)) {
+          throw new Error(`Action "${item.id}" belongs to built-in ${functionsName}, not System`);
+        }
+        const behavior = resolveBehaviorType(item).behaviorType;
         let ownerType = 'plugin';
         let owner = 'system';
-        if (item.objectClass !== 'System') {
+        if (item.objectClass !== 'System' && item.objectClass !== functionsName) {
           const object = families.get(item.objectClass) ?? await reader.readObjectType(item.objectClass);
           owner = object['plugin-id'] as string;
           if (behavior) {
@@ -63,7 +73,7 @@ export async function validateEventContracts(
             ownerType = 'behavior';
           }
         } else if (behavior) {
-          throw new Error('System cannot own a behavior instance');
+          throw new Error(`Built-in object "${item.objectClass}" cannot own a behavior instance`);
         }
         if (typeof owner !== 'string' || !owner) throw new Error(`Missing addon ID for "${item.objectClass}"`);
         const key = JSON.stringify([ownerType, owner, kind, item.id]);

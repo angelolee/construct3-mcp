@@ -170,6 +170,17 @@ describe('Event Sheet Templates', () => {
     expect(ev.functionParameters![1].initialValue).toBe('');
   });
 
+  it('createFunctionEvent honours returnType/isAsync/copyPicked options', () => {
+    const ev = createFunctionEvent('GetName', 100, undefined, {
+      returnType: 'string',
+      isAsync: true,
+      copyPicked: true,
+    });
+    expect(ev.functionReturnType).toBe('string');
+    expect(ev.functionIsAsync).toBe(true);
+    expect(ev.functionCopyPicked).toBe(true);
+  });
+
   it('createIncludeEvent creates valid include', () => {
     const ev = createIncludeEvent('SharedSheet');
     expect(ev.eventType).toBe('include');
@@ -194,25 +205,31 @@ describe('Block Event Template', () => {
     expect(block.sid).toBe(100);
     expect(block.conditions).toHaveLength(1);
     expect(block.actions).toHaveLength(1);
-    expect(block.children).toEqual([]);
-    expect(block.disabled).toBeUndefined();
-    expect(block.isElse).toBeUndefined();
+    // Like the editor: no empty children array, no false flags
+    expect(Object.keys(block)).toEqual(['eventType', 'conditions', 'actions', 'sid']);
   });
 
   it('creates disabled block', () => {
-    const block = createBlockEvent(100, [], [], true);
+    const block = createBlockEvent(100, [], [], { disabled: true });
     expect(block.disabled).toBe(true);
   });
 
-  it('creates OR block', () => {
-    const block = createBlockEvent(100, [], [], undefined, undefined, true);
+  it('creates OR block, never an isElse key', () => {
+    const block = createBlockEvent(100, [], [], { isOrBlock: true });
     expect(block.isOrBlock).toBe(true);
+    expect(block).not.toHaveProperty('isElse');
   });
 
   it('creates block with children', () => {
     const child = createBlockEvent(200, [{ id: 'x', objectClass: 'System', sid: 300 }], []);
-    const block = createBlockEvent(100, [{ id: 'y', objectClass: 'System', sid: 400 }], [], undefined, [child]);
+    const block = createBlockEvent(100, [{ id: 'y', objectClass: 'System', sid: 400 }], [], { children: [child] });
     expect(block.children).toHaveLength(1);
+  });
+
+  it('writes keys in the editor order: sid, disabled, children, isOrBlock', () => {
+    const child = createBlockEvent(200, [], []);
+    const block = createBlockEvent(100, [], [], { disabled: true, children: [child], isOrBlock: true });
+    expect(Object.keys(block)).toEqual(['eventType', 'conditions', 'actions', 'sid', 'disabled', 'children', 'isOrBlock']);
   });
 });
 

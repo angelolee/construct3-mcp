@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { Construct3ProjectReader } from '../../src/construct3/project-reader.js';
 import { Construct3ProjectWriter } from '../../src/construct3/project-writer.js';
 import { IdGenerator } from '../../src/construct3/id-generator.js';
+import { runInToolCall } from '../../src/construct3/disk-state.js';
 import { validateProjectIntegrity } from '../../src/construct3/analyzers/integrity.js';
 import { resetProjectIndex } from '../../src/construct3/analyzers/index-builder.js';
 import { registerEventTools } from '../../src/tools/event-tools.js';
@@ -86,6 +87,80 @@ describe('Construct folder project file layout', () => {
     expect(writer.getSubfolderForEntity('eventSheets', 'SharedEvents')).toBe('Logic/Shared');
   });
 
+  async function moveSpriteToLegacyFolder() {
+    await mkdir(join(dir, 'objectTypes/Actors'));
+    const path = join(dir, 'objectTypes/Actors/Sprite.json');
+    await rename(join(dir, 'objectTypes/Sprite.json'), path);
+    const project = JSON.parse(await readFile(join(dir, 'project.c3proj'), 'utf8'));
+    project.objectTypes = { items: [], subfolders: [{ name: 'Actors', items: ['Sprite'], subfolders: [] }] };
+    await writeFile(join(dir, 'project.c3proj'), JSON.stringify(project));
+    await reader.loadProject();
+    return path;
+  }
+
+  it('refuses to recreate a legacy file deleted externally during the call', async () => {
+    const path = await moveSpriteToLegacyFolder();
+    await runInToolCall(async () => {
+      const object = await reader.readObjectType('Sprite');
+      await rm(path);
+      await expect(writer.writeEntityFile('objectTypes', 'Sprite', { ...object, isGlobal: true }))
+        .rejects.toMatchObject({ code: 'E_STALE_FILE' });
+    });
+    expect((await readdir(join(dir, 'objectTypes'))).filter(p => p.endsWith('.json'))).toEqual([]);
+    expect(await readdir(join(dir, 'objectTypes/Actors'))).toEqual([]);
+  });
+
+  it('invalidates legacy cached data when a higher-priority flat file appears', async () => {
+    const path = await moveSpriteToLegacyFolder();
+    const original = await readFile(path, 'utf8');
+    await reader.readAllObjectTypes();
+    await writeFile(join(dir, 'objectTypes/sprite.json'), JSON.stringify({ ...JSON.parse(original), isGlobal: true }));
+    expect(await reader.syncWithDisk()).toBe(true);
+    expect((await reader.readAllObjectTypes()).get('Sprite')!.isGlobal).toBe(true);
+    expect(await readFile(path, 'utf8')).toBe(original);
+  });
+
+  it('refuses to overwrite a flat file that appeared after a legacy read in the same call', async () => {
+    const path = await moveSpriteToLegacyFolder();
+    const original = await readFile(path, 'utf8');
+    const external = JSON.stringify({ ...JSON.parse(original), isGlobal: true });
+    const flat = join(dir, 'objectTypes/sprite.json');
+    await runInToolCall(async () => {
+      const object = await reader.readObjectType('Sprite');
+      await writeFile(flat, external);
+      await expect(writer.writeEntityFile('objectTypes', 'Sprite', object)).rejects.toMatchObject({ code: 'E_STALE_FILE' });
+    });
+    expect(await readFile(path, 'utf8')).toBe(original);
+    expect(await readFile(flat, 'utf8')).toBe(external);
+  });
+
+  it('keeps missing flat-file dependencies when parallel calls refresh a legacy bulk cache', async () => {
+    const legacy = await moveSpriteToLegacyFolder();
+    const original = await readFile(legacy, 'utf8');
+    await reader.readAllObjectTypes();
+    let ready!: () => void;
+    let resume!: () => void;
+    const cachedRead = new Promise<void>(resolve => { ready = resolve; });
+    const refreshed = new Promise<void>(resolve => { resume = resolve; });
+    const firstCall = runInToolCall(async () => {
+      const object = (await reader.readAllObjectTypes()).get('Sprite')!;
+      ready();
+      await refreshed;
+      await expect(writer.writeEntityFile('objectTypes', 'Sprite', object)).rejects.toMatchObject({ code: 'E_STALE_FILE' });
+    });
+    await cachedRead;
+    const flat = join(dir, 'objectTypes/sprite.json');
+    const external = JSON.stringify({ ...JSON.parse(original), isGlobal: true });
+    await writeFile(flat, external);
+    await runInToolCall(async () => {
+      expect((await reader.readAllObjectTypes()).get('Sprite')!.isGlobal).toBe(true);
+    });
+    resume();
+    await firstCall;
+    expect(await readFile(flat, 'utf8')).toBe(external);
+    expect(await readFile(legacy, 'utf8')).toBe(original);
+  });
+
   it('does not hide malformed flat files by falling back to legacy folders', async () => {
     await mkdir(join(dir, 'objectTypes/Actors'));
     await cp(join(dir, 'objectTypes/Sprite.json'), join(dir, 'objectTypes/Actors/Sprite.json'));
@@ -123,7 +198,7 @@ describe('Construct folder project file layout', () => {
     registerLayoutTools(deps);
     const result = await server.callTool(tool, { name: name.toUpperCase(), pluginId: 'Sprite' });
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('already exists');
+    expect(result.content[0].text).toMatch(/already exists|already used|differs only in case/);
     expect(await readFile(originalPath, 'utf8')).toBe(originalFile);
     expect(await readFile(projectPath, 'utf8')).toBe(originalProject);
     expect(await readdir(join(dir, category))).not.toContain(name.toLowerCase() + '.json.bak');

@@ -13,3 +13,7 @@ Verification: local 483 tests/build passed; standalone upstream 1,984 tests pass
 The four added tools passed through a fresh connection targeting the platformer at the migrated knowledge root. They remain absent from this chat's host catalog: its observed running workers did not receive `C3_KNOWLEDGE_PATH`, although the saved configuration has it. A full host restart and subsequent catalog check remain necessary; do not replace this configuration issue with implicit knowledge discovery.
 
 Detailed evidence, conflicts, counts and the recommended integration sequence are in the [knowledge comparison](../../Construct3-Knowledge/upstream-comparison.md). The current local main is unchanged and the feature branch is preserved.
+
+## Subsequent integration
+
+This document records the pre-merge comparison. The verified v1.10.0 candidate and deliberate compatibility choices are now documented in [UPSTREAM-INTEGRATION.md](UPSTREAM-INTEGRATION.md). The source branch is preserved as `feature/construct3-knowledge`; integration uses `feature/construct3-knowledge-integration`.

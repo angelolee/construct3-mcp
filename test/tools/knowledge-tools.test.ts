@@ -32,6 +32,7 @@ c.execute('INSERT INTO page_search VALUES(?,?,?)',('manual:1','Picking instances
 examples=[('platformer',{'name':'Platformer','catalog':{'tags':['platformer','barebones-template']},'addons':[{'type':'behavior','id':'Platform'}]}),('command-test',{'name':'External Command','catalog':{'projectUrl':'https://github.com/AshleyScirra/CommandAndConstruct'},'addons':[]}),('shooter',{'name':'Shooter','catalog':{'tags':['shooter']},'addons':[{'type':'behavior','id':'Bullet'}]})]
 for slug,m in examples:c.execute('INSERT INTO examples VALUES(?,?)',(slug,json.dumps(m)))
 aces=[('behavior','Platform','actions','set-max-speed',[{'id':'max-speed','type':'number'}]),('behavior','Platform','actions','simulate-control',[{'id':'control','type':'combo','items':['left','right','jump']}]),('plugin','system','actions','go-to-layout',[{'id':'layout','type':'layout'}]),('plugin','system','actions','unsupported-test',[{'id':'value','type':'variadic'}]),('plugin','Text','actions','set-text',[{'id':'text','type':'string'}]),('common','builtin','actions','set-position',[{'id':'x','type':'number'},{'id':'y','type':'number'}])]
+aces += [('plugin','system','actions','map-function',[{'id':'name','type':'string'},{'id':'string','type':'string'},{'id':'function','type':'function'}]),('plugin','system','actions','set-function-return-value',[{'id':'value','type':'any'}])]
 for t,o,k,i,p in aces:c.execute('INSERT INTO aces VALUES(?,?,?,?,?,?)',(t,o,k,i,'test',json.dumps({'id':i,'params':p})))
 c.execute('INSERT INTO observed_aces VALUES(?,?,?,?,?)',('plugin','Sprite','actions','set-position','{}'))
 c.commit()
@@ -201,6 +202,19 @@ describe('Configured pre-write event contract validation', () => {
     const data = JSON.parse(result.content[0].text);
     expect(data.warnings?.some((w: string) => w.includes('was not validated'))).not.toBe(true);
   });
+  it('preserves comment and script rows alongside verified ACEs and nested non-ACE events', async () => {
+    const result = await server.callTool('add_event_block', {
+      sheetName: 'MainSheet',
+      actions: [{ type: 'comment', text: 'Movement tuning' }, { type: 'script', script: ['console.log("ready");'] }, movement()],
+      children: [{ eventType: 'comment', text: 'Child note' }, { eventType: 'script', script: ['console.log("child");'] }],
+    });
+    expect(result.isError).not.toBe(true);
+    const block = JSON.parse(await readFile(sheetPath, 'utf8')).events.at(-1);
+    expect(block.actions[0]).toMatchObject({ type: 'comment', text: 'Movement tuning' });
+    expect(block.actions[1]).toMatchObject({ type: 'script', script: ['console.log("ready");'] });
+    expect(block.actions[2].id).toBe('set-max-speed');
+    expect(block.children.map((child: any) => child.eventType)).toEqual(['comment', 'script']);
+  });
   it('accepts a common contract whose owner applicability was observed', async () => {
     const result = await server.callTool('add_event_block', { sheetName: 'MainSheet', actions: [{ id: 'set-position', objectClass: 'Sprite', parameters: { x: '10', y: '20' } }] });
     expect(result.isError).not.toBe(true);
@@ -252,6 +266,63 @@ describe('Configured pre-write event contract validation', () => {
     const invalid = await server.callTool('add_event_block', { sheetName: 'MainSheet', actions: [{ callFunction: 'Reset', parameters: [] }] });
     expect(invalid.isError).toBe(true);
     expect(await readFile(sheetPath, 'utf8')).toBe(before);
+  });
+
+  async function writeBooleanFunction() {
+    await writer.writeEntityFile('eventSheets', 'MainSheet', {
+      name: 'MainSheet', events: [
+        { eventType: 'function-block', functionName: 'Reset', functionParameters: [{ name: 'enabled', type: 'boolean', sid: 902 }], conditions: [], actions: [], sid: 900 },
+        { eventType: 'block', conditions: [], actions: [{ callFunction: 'Reset', parameters: [true], sid: 903 }], sid: 901 },
+      ],
+    });
+  }
+
+  it('accepts canonical boolean function arguments and upstream spelling normalization', async () => {
+    await writeBooleanFunction();
+    const added = await server.callTool('add_event_block', { sheetName: 'MainSheet', actions: [{ callFunction: 'reset', parameters: [true] }] });
+    expect(added.isError).not.toBe(true);
+    expect(JSON.parse(await readFile(sheetPath, 'utf8')).events.at(-1).actions[0]).toMatchObject({ callFunction: 'Reset', parameters: [true] });
+    const updated = await server.callTool('update_event_block', { sheetName: 'MainSheet', sid: 901, updateActions: [{ index: 0, parameters: [false] }] });
+    expect(updated.isError).not.toBe(true);
+    expect(JSON.parse(await readFile(sheetPath, 'utf8')).events[1].actions[0].parameters).toEqual([false]);
+  });
+
+  it('checks surviving function-call edits and keeps the file unchanged on arity or representation errors', async () => {
+    await writeBooleanFunction();
+    const original = await readFile(sheetPath, 'utf8');
+    for (const parameters of [[], ['true']]) {
+      const result = await server.callTool('update_event_block', { sheetName: 'MainSheet', sid: 901, updateActions: [{ index: 0, parameters }] });
+      expect(result.isError).toBe(true);
+      expect(await readFile(sheetPath, 'utf8')).toBe(original);
+    }
+    await rejectsWithoutWrite({ callFunction: 'Reset', parameters: ['true'] }, 'boolean');
+    const removed = await server.callTool('update_event_block', {
+      sheetName: 'MainSheet', sid: 901, updateActions: [{ index: 0, parameters: [] }], removeActionIndices: [0],
+    });
+    expect(removed.isError).not.toBe(true);
+    expect(JSON.parse(await readFile(sheetPath, 'utf8')).events[1].actions).toEqual([]);
+  });
+
+  it.each(['Functions', 'Fn'])('validates the built-in %s namespace using System contracts', async name => {
+    await writeBooleanFunction();
+    if (name !== 'Functions') {
+      const projectPath = join(projectDir, 'project.c3proj');
+      const project = JSON.parse(await readFile(projectPath, 'utf8'));
+      project.functionsName = name;
+      await writeFile(projectPath, JSON.stringify(project));
+    }
+    const mapped = await server.callTool('add_event_block', {
+      sheetName: 'MainSheet', actions: [{ id: 'map-function', objectClass: name, parameters: { name: '"ResetMap"', string: '"reset"', function: 'Reset' } }],
+    });
+    expect(mapped.isError).not.toBe(true);
+    const returned = await server.callTool('update_event_block', {
+      sheetName: 'MainSheet', sid: 900, addActions: [{ id: 'set-function-return-value', objectClass: name, parameters: { value: '1' } }],
+    });
+    expect(returned.isError).not.toBe(true);
+    await rejectsWithoutWrite({ id: 'nonexistent', objectClass: name }, 'nonexistent');
+    await rejectsWithoutWrite({ id: 'map-function', objectClass: name, behaviorType: 'Movement', parameters: { name: '"ResetMap"', string: '"reset"', function: 'Reset' } }, 'behavior');
+    await rejectsWithoutWrite({ id: 'go-to-layout', objectClass: name, parameters: { layout: 'Layout 1' } }, 'go-to-layout');
+    await rejectsWithoutWrite({ id: 'map-function', objectClass: 'System', parameters: { name: '"ResetMap"', string: '"reset"', function: 'Reset' } }, 'map-function');
   });
   it('validates only surviving changes in combined update and removal requests', async () => {
     await writer.writeEntityFile('eventSheets', 'MainSheet', { name: 'MainSheet', events: [{ eventType: 'block', sid: 900, conditions: [], actions: [{ ...movement(), sid: 901 }] }] });

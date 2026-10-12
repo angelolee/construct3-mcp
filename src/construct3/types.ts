@@ -2,12 +2,17 @@
  * TypeScript type definitions for Construct 3 project structures.
  *
  * Field names match the real C3 JSON format (camelCase for most fields,
- * kebab-case for legacy keys like 'plugin-id').
+ * kebab-case for a few keys like 'plugin-id').
+ * Note: behavior conditions/actions use camelCase 'behaviorType' — the
+ * kebab-case 'behavior-type' written by older versions of this server is
+ * not part of the format (issue #16).
  *
  * All entity interfaces keep `[key: string]: unknown` index signatures
  * for backwards compatibility — real C3 files may contain fields not
  * yet modelled here.
  */
+
+import type { UnscannedFileReport } from './analyzers/unscanned-uses.js';
 
 // ─── Project Root ───────────────────────────────────────────
 
@@ -107,6 +112,10 @@ export interface FileItem {
   type: string;
   sid: number;
   'file-info'?: {
+    purpose: string;
+  };
+  /** Script files: purpose "main", "imports-for-events" or "none" */
+  'script-info'?: {
     purpose: string;
   };
   'icon-info'?: {
@@ -231,14 +240,22 @@ export interface EventSheet {
   [key: string]: unknown;
 }
 
-/** Condition within an event block */
+/**
+ * Condition within an event block. Else is the System condition
+ * { id: "else", objectClass: "System", sid } at index 0; conditions after it
+ * make an else-if.
+ */
 export interface Condition {
   id: string;
   objectClass: string;
   sid: number;
+  disabled?: boolean;
+  /** Behavior name (as defined on the object type or one of its families) for behavior conditions */
   behaviorType?: string;
   parameters?: Record<string, unknown>;
   isInverted?: boolean;
+  /** Legacy per-condition OR flag written by construct3-mcp 1.8.1 and earlier; Construct 3 uses the block's isOrBlock. */
+  isOr?: boolean;
   [key: string]: unknown;
 }
 
@@ -247,30 +264,39 @@ export interface StandardAction {
   id: string;
   objectClass: string;
   sid: number;
+  disabled?: boolean;
+  /** Behavior name (as defined on the object type or one of its families) for behavior actions */
   behaviorType?: string;
   parameters?: Record<string, unknown>;
-  disabled?: boolean;
   [key: string]: unknown;
 }
 
-/** Function call action */
+/** Function call action, as the editor saves it: no id/objectClass, positional parameters */
 export interface FunctionCallAction {
-  sid: number;
   callFunction: string;
-  parameters?: Array<string | number>;
+  sid: number;
   disabled?: boolean;
+  parameters?: Array<string | number | boolean>;
   [key: string]: unknown;
 }
 
-/** Script action */
+/** Script action. The current editor saves the code as an array of lines; older Construct 3 releases (and construct3-mcp 1.8.1 and earlier) saved one string. */
 export interface ScriptAction {
   type: 'script';
-  script: string;
+  language?: string;
+  script: string | string[];
   disabled?: boolean;
   [key: string]: unknown;
 }
 
-export type Action = StandardAction | FunctionCallAction | ScriptAction;
+/** Comment row among a block's actions */
+export interface CommentAction {
+  type: 'comment';
+  text: string;
+  [key: string]: unknown;
+}
+
+export type Action = StandardAction | FunctionCallAction | ScriptAction | CommentAction;
 
 /** Block event — the most common: has conditions, actions, optional children */
 export interface BlockEvent {
@@ -280,7 +306,10 @@ export interface BlockEvent {
   children?: C3Event[];
   sid?: number;
   disabled?: boolean;
+  /** OR block: the conditions are ORed instead of ANDed */
   isOrBlock?: boolean;
+  /** Legacy block flag written by construct3-mcp 1.8.1 and earlier; Construct 3 uses a System "else" condition. */
+  isElse?: boolean;
   [key: string]: unknown;
 }
 
@@ -341,10 +370,11 @@ export interface CommentEvent {
   [key: string]: unknown;
 }
 
-/** Script block event — inline JavaScript */
+/** Script block event — inline JavaScript (array of lines, as the editor saves it) */
 export interface ScriptEvent {
   eventType: 'script';
-  script: string;
+  language?: string;
+  script: string | string[];
   [key: string]: unknown;
 }
 
@@ -402,7 +432,8 @@ export interface Layer {
   sid: number;
   instances: Instance[];
   overriden?: number;
-  subLayers?: unknown[];
+  /** Nested layers of the same shape, to any depth (see layers.ts) */
+  subLayers?: Layer[];
   effectTypes?: Array<Record<string, unknown>>;
   isInitiallyVisible?: boolean;
   isInitiallyInteractive?: boolean;
@@ -456,8 +487,15 @@ export interface Instance {
 export interface ObjectReference {
   objectName: string;
   eventSheet: string;
-  path: string; // e.g., "group:CheckBigWin > block:3 > action:2"
-  context: 'condition' | 'action';
+  path: string; // e.g., "group:Movement > block > action:2"
+  /**
+   * How the object is used: as the object of a condition/action, as a whole
+   * parameter value (object parameters), inside a parameter expression
+   * ("Name.X"), from a script action/event (runtime.objects.Name), as the
+   * object a custom action block defines a custom action for, or as the
+   * literal name System "Create object (by name)" creates.
+   */
+  context: 'condition' | 'action' | 'parameter' | 'expression' | 'script' | 'custom-action' | 'create-by-name';
 }
 
 /** Node in the event sheet flow graph */
@@ -471,6 +509,19 @@ export interface EventSheetFlowNode {
   groupCount: number;
 }
 
+/**
+ * An object type whose own file could not be parsed (issue #60): its SID is
+ * unknown, so uses by SID cannot be looked up.
+ */
+export interface UnanalysedObjectFile {
+  /** "objectTypes/<name>", as validate_project lists unscanned files */
+  file: string;
+  /** Why it was not parsed, e.g. "over the 10MB read limit" */
+  reason: string;
+  /** What could not be checked because of it */
+  unchecked: string;
+}
+
 /** Node in the object dependency graph */
 export interface ObjectDependencyNode {
   objectName: string;
@@ -480,7 +531,20 @@ export interface ObjectDependencyNode {
   };
   families: string[];
   coOccursWith: string[];
+  /** References the index found (event references + layouts) */
   referenceCount: number;
+  /**
+   * Files that could not be parsed whose text names the object (or holds its
+   * SID), or that could not be searched at all: possible references, which
+   * referenceCount does not count
+   */
+  possiblyReferencedIn?: string[];
+  /**
+   * The object's own object type file could not be parsed: its SID is
+   * unknown, so references by SID (object properties of other instances)
+   * are not counted, and `unchecked` says so
+   */
+  unanalysed?: UnanalysedObjectFile;
 }
 
 /** Performance issue found by heuristic analysis */
@@ -494,12 +558,36 @@ export interface PerformanceIssue {
 
 /** Asset usage information */
 export interface AssetUsageInfo {
+  /** File name with its folder path (file assets) or object type name (images) */
   name: string;
   type: 'sound' | 'music' | 'image' | 'font' | 'video' | 'icon' | 'general';
+  /**
+   * used: a reference was found; unused: every place this kind of asset can be
+   * named was searched and none names it; not-analysed: the use cannot be
+   * decided (see `reason`)
+   */
+  status: 'used' | 'unused' | 'not-analysed';
   referencedIn: {
     eventSheets: string[];
     layouts: string[];
+    /** Object types and families whose properties name the file */
+    objectTypes?: string[];
+    /** Script files (inline scripts count under eventSheets) */
+    scripts?: string[];
+    /** Flowcharts and timelines holding a string that names the file (path below flowcharts/ or timelines/, no .json) */
+    flowcharts?: string[];
+    timelines?: string[];
+    /** Project files (files/ folder) whose text names the file */
+    projectFiles?: string[];
   };
+  /** How the asset is referenced, e.g. "audio-file", "play-by-name", "string", "property", "script" */
+  via?: string[];
+  /** Why the asset is not analysed, or a note on an unused one */
+  reason?: string;
+  /** Images: animations of a sprite object type (absent for a single-image object type) */
+  animations?: number;
+  /** Images: frames of the object type (1 for a single-image object type such as a Tiled Background) */
+  frames?: number;
   isGlobal: boolean;
 }
 
@@ -515,6 +603,11 @@ export interface WriteResult {
   generatedUid?: number;
   warnings?: string[];
   backupFile?: string;
+  /**
+   * Registered files the bulk reads skipped that the tool's reference check
+   * searched as text (see analyzers/unscanned-uses.ts)
+   */
+  unscannedFiles?: UnscannedFileReport[];
 }
 
 /** Result of checking references before deletion */
