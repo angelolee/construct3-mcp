@@ -3,6 +3,7 @@
  */
 
 import { z } from 'zod';
+import { IdGenerator } from '../construct3/id-generator.js';
 import type { MutationToolDeps } from './shared.js';
 import type { C3Event, EventSheet, FunctionBlockEvent, WriteResult } from '../construct3/types.js';
 import {
@@ -441,8 +442,9 @@ export function registerEventTools({ server: mcpServer, reader, writer, idGen, k
   server.registerTool(
     'add_event_block',
     {
-      description: 'Add a block event (conditions + actions) to an event sheet — the core of gameplay logic. Written in the shapes the Construct 3 editor saves: sub-events (blocks, also without conditions, which run whenever their parent runs; comments; scripts), else and else-if blocks (a System "else" first condition), OR blocks (isOrBlock), function calls ({ callFunction, parameters: [...] }), script actions (lines, language "javascript"), comment rows and per-condition/per-action disabling. Unknown keys, in the arguments and at any depth, are refused, never dropped. Writes that would break a checked editor load-time rule (expression syntax, empty expressions, trigger placement) are refused.',
+      description: 'Set dryRun true to validate without writing. Add a block event (conditions + actions) to an event sheet — the core of gameplay logic. Written in the shapes the Construct 3 editor saves: sub-events (blocks, also without conditions, which run whenever their parent runs; comments; scripts), else and else-if blocks (a System "else" first condition), OR blocks (isOrBlock), function calls ({ callFunction, parameters: [...] }), script actions (lines, language "javascript"), comment rows and per-condition/per-action disabling. Unknown keys, in the arguments and at any depth, are refused, never dropped. Writes that would break a checked editor load-time rule (expression syntax, empty expressions, trigger placement) are refused.',
       inputSchema: z.object({
+        dryRun: z.boolean().optional().default(false).describe('Validate on a copy without writing files, changing backups or reserving live IDs. A later apply revalidates; this does not prove gameplay.'),
         sheetName: z.string().max(200).describe('Target event sheet'),
         eventType: z.literal('block', {
           errorMap: (_issue, ctx) => ({
@@ -460,7 +462,7 @@ export function registerEventTools({ server: mcpServer, reader, writer, idGen, k
         isOrBlock: z.boolean().optional().describe(EVENT_INPUT_DESCRIPTIONS.isOrBlock),
         children: z.array(childEventSchema).optional().default([]).describe('Sub-events nested inside this block (recursive, max depth 10, max 200 total events): blocks { conditions?, actions?, disabled?, isElse?, isOrBlock?, children? }, comments { eventType: "comment", text } and scripts { eventType: "script", script }. Other event types (variables, groups, functions, includes) and unknown keys are refused'),
       }, {
-        errorMap: unknownKeysErrorMap('the arguments of add_event_block', 'add_event_block takes sheetName, eventType, conditions, actions, groupPath, position, disabled, isElse, isOrBlock and children; a "sid" is ignored. Comments, groups, variables, functions and includes are added with add_event_to_sheet.'),
+        errorMap: unknownKeysErrorMap('the arguments of add_event_block', 'add_event_block takes dryRun, sheetName, eventType, conditions, actions, groupPath, position, disabled, isElse, isOrBlock and children; a "sid" is ignored. Comments, groups, variables, functions and includes are added with add_event_to_sheet.'),
       }).strict(),
     },
     async (args) => {
@@ -469,10 +471,12 @@ export function registerEventTools({ server: mcpServer, reader, writer, idGen, k
         let sheet: EventSheet;
         try {
           sheet = await reader.readEventSheet(args.sheetName);
+          if (args.dryRun) sheet = structuredClone(sheet);
         } catch {
           return notFoundError('Event sheet', args.sheetName, reader.findNearestName(args.sheetName, 'eventsheets'), 'list_eventsheets');
         }
         const beforeEvents = snapshotEvents(sheet.events);
+        const workingIds = args.dryRun ? new IdGenerator() : idGen;
 
         // Collect all objectClass references from entire tree (parent + descendants)
         const allRefs: ObjectRef[] = [];
@@ -495,7 +499,7 @@ export function registerEventTools({ server: mcpServer, reader, writer, idGen, k
         const counter = { count: 0, warnings: [] as string[] };
         const blockEvent = await buildBlockEvent(
           reader,
-          idGen,
+          workingIds,
           {
             conditions: args.conditions,
             actions: args.actions,
@@ -539,6 +543,13 @@ export function registerEventTools({ server: mcpServer, reader, writer, idGen, k
           return toolError(loadRuleErrorMessage(loadCheck.errors));
         }
         warnings.push(...loadCheck.warnings);
+
+        if (args.dryRun) return toolResult({
+          success: true, dryRun: true, wroteFiles: false, entity: args.sheetName,
+          validation: { objectClasses: 'passed', aceContracts: knowledge ? 'passed' : 'not-configured', loadRules: 'passed' },
+          warnings: warnings.slice(0, 100), warningsTruncated: warnings.length > 100,
+          nextStep: 'Apply with dryRun false to revalidate the current project and write. Reopen in the Editor and test the intended behavior.',
+        }, { projectWritten: false });
 
         // Write back
         const subfolder = writer.getSubfolderForEntity('eventSheets', args.sheetName);
@@ -1390,8 +1401,9 @@ export function registerEventTools({ server: mcpServer, reader, writer, idGen, k
   server.registerTool(
     'update_event_block',
     {
-      description: 'Update an existing block event in an event sheet — modify action parameters, add/remove actions or conditions, toggle disabled state, make it an else or OR block. Identify the block by its SID (use get_eventsheet_details to find it). A SID shared by several events in the sheet is refused with a list of candidates; pass eventPath to pick one. Unknown arguments and keys are refused, never dropped.',
+      description: 'Set dryRun true to validate without writing. Update an existing block event in an event sheet — modify action parameters, add/remove actions or conditions, toggle disabled state, make it an else or OR block. Identify the block by its SID (use get_eventsheet_details to find it). A SID shared by several events in the sheet is refused with a list of candidates; pass eventPath to pick one. Unknown arguments and keys are refused, never dropped.',
       inputSchema: z.object({
+        dryRun: z.boolean().optional().default(false).describe('Validate on a copy without writing files, changing backups or reserving live IDs. A later apply revalidates; this does not prove gameplay.'),
         sheetName: z.string().max(200).describe('Target event sheet'),
         sid: z.number().int().positive().describe('SID of the block event to update'),
         eventPath: eventPathSchema,
@@ -1422,7 +1434,7 @@ export function registerEventTools({ server: mcpServer, reader, writer, idGen, k
         removeActionIndices: z.array(z.number().int().min(0)).optional().describe('Remove actions by index (0-based, applied before adds)'),
         removeConditionIndices: z.array(z.number().int().min(0)).optional().describe('Remove conditions by index (0-based, applied before adds)'),
       }, {
-        errorMap: unknownKeysErrorMap('the arguments of update_event_block', 'update_event_block takes sheetName, sid, eventPath, disabled, isElse, isOrBlock, updateActions, updateConditions, addActions, addConditions, removeActionIndices and removeConditionIndices. It does not add sub-events.'),
+        errorMap: unknownKeysErrorMap('the arguments of update_event_block', 'update_event_block takes dryRun, sheetName, sid, eventPath, disabled, isElse, isOrBlock, updateActions, updateConditions, addActions, addConditions, removeActionIndices and removeConditionIndices. It does not add sub-events.'),
       }).strict(),
     },
     async (args) => {
@@ -1446,12 +1458,14 @@ export function registerEventTools({ server: mcpServer, reader, writer, idGen, k
         let sheet: EventSheet;
         try {
           sheet = await reader.readEventSheet(args.sheetName);
+          if (args.dryRun) sheet = structuredClone(sheet);
         } catch {
           return notFoundError('Event sheet', args.sheetName, reader.findNearestName(args.sheetName, 'eventsheets'), 'list_eventsheets');
         }
 
         const events = sheet.events as Record<string, unknown>[];
         const beforeEvents = snapshotEvents(sheet.events);
+        const workingIds = args.dryRun ? new IdGenerator() : idGen;
         const found = resolveEventBySid(events, args.sid, {
           sheetName: args.sheetName,
           action: 'update',
@@ -1662,7 +1676,7 @@ export function registerEventTools({ server: mcpServer, reader, writer, idGen, k
               }
               warnings.push(`${where}: an added System "else" condition goes after the existing conditions, but Construct 3 saves Else as the first condition. Use isElse: true instead.`);
             }
-            const condSid = await idGen.generateSid(reader);
+            const condSid = await workingIds.generateSid(reader);
             const condition = buildCondition(c, condSid);
             conditions.push(condition);
             addedConditions.push(condition);
@@ -1673,7 +1687,7 @@ export function registerEventTools({ server: mcpServer, reader, writer, idGen, k
         if (args.addActions && args.addActions.length > 0) {
           const ctx = { warnings, functions };
           for (const a of args.addActions) {
-            const action = await buildAction(reader, idGen, a, ctx, where) as unknown as Record<string, unknown>;
+            const action = await buildAction(reader, workingIds, a, ctx, where) as unknown as Record<string, unknown>;
             actions.push(action);
             addedActions.push(action);
           }
@@ -1686,7 +1700,7 @@ export function registerEventTools({ server: mcpServer, reader, writer, idGen, k
           const hadLegacyFlag = 'isElse' in event;
           delete event.isElse;
           if (args.isElse && !isElseCondition(conditions[0])) {
-            conditions.unshift(createElseCondition(await idGen.generateSid(reader)));
+            conditions.unshift(createElseCondition(await workingIds.generateSid(reader)));
           } else if (!args.isElse && isElseCondition(conditions[0])) {
             conditions.shift();
             removedConditions = true;
@@ -1728,6 +1742,14 @@ export function registerEventTools({ server: mcpServer, reader, writer, idGen, k
           return toolError(loadRuleErrorMessage(loadCheck.errors));
         }
         warnings.push(...loadCheck.warnings);
+
+        if (args.dryRun) return toolResult({
+          success: true, dryRun: true, wroteFiles: false, entity: args.sheetName,
+          validation: { objectClasses: 'passed', aceContracts: knowledge ? 'passed' : 'not-configured', loadRules: 'passed' },
+          warnings: warnings.slice(0, 100), warningsTruncated: warnings.length > 100,
+          nextStep: 'Apply with dryRun false to revalidate the current project and write. Reopen in the Editor and test the intended behavior.',
+          eventPath: path,
+        }, { projectWritten: false });
 
         // Write back
         const subfolder = writer.getSubfolderForEntity('eventSheets', args.sheetName);
