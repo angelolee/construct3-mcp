@@ -724,3 +724,5 @@ With knowledge configured, starting without a project argument in a directory co
 See [knowledge integration](../Construct3-Knowledge/knowledge-integration.md) and [bootstrap acceptance](../Construct3-Knowledge/bootstrap-evaluation.md) for configuration, evidence, rollback and runtime limitations. Restart an already connected server to load the new modules and tool catalog.
 
 The [upstream integration record](docs/UPSTREAM-INTEGRATION.md) describes the combined v1.10.0 implementation, verification and rollback.
+
+[Host recovery and preview acceptance](docs/HOST-RECOVERY.md) records the stale chat cwd repair, actual verification of all four tools in Codex and the post-merge native previews. Current work uses `feature/construct3-knowledge`; the integration branch was consolidated and removed.

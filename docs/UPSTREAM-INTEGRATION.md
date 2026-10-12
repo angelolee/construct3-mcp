@@ -1,6 +1,6 @@
 # Upstream v1.10.0 integration
 
-The `feature/construct3-knowledge-integration` branch integrates upstream `1eb4973e0d032fba794c719b1e3971cf71e188a3` with the committed local knowledge work. The source branch was renamed from `codex/construct3-knowledge` to `feature/construct3-knowledge` and remains available for rollback. Local main remains at `6957fcb`; no remote push is part of this delivery.
+The integration was created on `feature/construct3-knowledge-integration`, combining upstream `1eb4973e0d032fba794c719b1e3971cf71e188a3` with the committed local knowledge work. On October 12, 2026, it was fast-forwarded into `feature/construct3-knowledge`, and the integration branch was deleted. The earlier source head `66d099a` remains reachable for a detached rollback. Local main remains at `6957fcb`; no remote push is part of this delivery.
 
 ## Retained behavior
 
@@ -25,6 +25,6 @@ The single fresh final review found four material issues: negative bulk-cache de
 
 Current evidence is in [the knowledge integration report](../../Construct3-Knowledge/upstream-integration.md), its execution ledger and reproducible scripts. Originals, generated games/packages, SQLite, dependencies and the old-worktree recovery archive remain outside Git.
 
-Native Construct tools and Editor automation were unavailable in this chat after the app restart. Independent stdio checks and host tool exposure are separate: no claim is made that the four tools appear in this chat or that the newly generated packages received a fresh Editor/gameplay run. Earlier acceptance of pre-merge prototypes remains historical evidence only. Full expression semantics, picking and gameplay coverage remain outside the exact ACE checks.
+Native Construct tools and Editor automation were unavailable during the integration delivery. The subsequent [host recovery](HOST-RECOVERY.md) resolved the stale chat cwd, verified all four tools in this chat, and observed targeted previews of the new packages. Those later proofs remain separate from the original static/protocol gates. Full expression semantics, picking and gameplay coverage remain outside the exact ACE checks.
 
-Rollback: switch the primary checkout to `feature/construct3-knowledge` and rebuild. Preserve the configured knowledge root. The obsolete `codex/construct3-compatibility` worktree has no unique commits; its 91 source files were archived and SHA-256 verified before cleanup. Recovery instructions are in the knowledge report.
+Rollback to the pre-upstream source: `git switch --detach 66d099a8601fdc3cd6f91082f8931b0126eb2c12`, then rebuild. Return to `feature/construct3-knowledge` for the current implementation. Preserve the configured knowledge root. The obsolete `codex/construct3-compatibility` worktree had no unique commits; its 91 source files were archived and SHA-256 verified before cleanup. Recovery instructions are in the knowledge report.
