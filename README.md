@@ -441,7 +441,7 @@ Note: Antigravity doesn't set a working directory per-project, so pass the proje
 
 ### With Windsurf
 
-Windsurf (now Devin Desktop) uses the same `mcpServers` format. Its Cascade agent allows at most 100 tools in total, and this server alone brings 83.
+Windsurf (now Devin Desktop) uses the same `mcpServers` format. Its Cascade agent allows at most 100 tools in total, and this server brings 84 project tools, or 90 with optional knowledge enabled.
 
 ### Standalone Testing
 
@@ -717,7 +717,7 @@ MIT License - see [LICENSE](LICENSE) file for details
 
 This branch integrates upstream v1.10.0 with the local knowledge features. Object, event-sheet, layout and family files use flat lowercase paths for creation. Existing flat files retain their spelling, and legacy physical-folder files remain supported when no flat file exists. Project-bar folders stay in project metadata. The shared resolver participates in upstream's disk synchronization, stale-write checks and per-call backups.
 
-Set `C3_KNOWLEDGE_PATH` to the Construct3-Knowledge directory and optionally `C3_KNOWLEDGE_PYTHON` to a Python 3 executable with SQLite/FTS5 support. This enables `search_construct_docs`, `search_construct_examples`, `get_ace_contract`, configured pre-write event checks, and `create_project_from_template`. Retrieved contracts are versioned evidence; unsupported or unavailable coverage is explicit.
+Set `C3_KNOWLEDGE_PATH` to the Construct3-Knowledge directory and optionally `C3_KNOWLEDGE_PYTHON` to a Python 3 executable with SQLite/FTS5 support. This enables `search_construct_docs`, `search_construct_examples`, `get_ace_contract`, configured pre-write event checks, `create_project_from_template`, `search_construct_recipes` and `get_construct_recipe`. Retrieved contracts are versioned evidence; unsupported or unavailable coverage is explicit.
 
 With knowledge configured, starting without a project argument in a directory containing no `.c3proj` exposes knowledge/bootstrap tools. Copy an indexed original using `exampleSlug` and `destinationName`; the result lives under `created-projects/<name>/project/`. Start a fresh MCP connection with its returned `projectPath` for inspection, mutation and packing. The original connection stays bound to its previous project. Existing destinations and source drift are rejected.
 
@@ -726,3 +726,14 @@ See [knowledge integration](../Construct3-Knowledge/knowledge-integration.md) an
 The [upstream integration record](docs/UPSTREAM-INTEGRATION.md) describes the combined v1.10.0 implementation, verification and rollback.
 
 [Host recovery and preview acceptance](docs/HOST-RECOVERY.md) records the stale chat cwd repair, actual verification of all four tools in Codex and the post-merge native previews. Current work uses `feature/construct3-knowledge`; the integration branch was consolidated and removed.
+
+
+### Native structural editing
+
+`get_object_editing_context` returns a compact context for one registered object type or family: plugin ID, actual own/inherited behavior instance names and addon IDs, variables, and paged placements with layout/layer path, UID/SID and event sheet. It reports unreadable, malformed, ambiguous and truncated context instead of treating omissions as complete. `coverage.complete` describes only declarations and layout placements; use existing dependency, event-flow/outline, function and script tools for references and execution context.
+
+With local knowledge enabled, `search_construct_recipes` and `get_construct_recipe` expose independently authored structural workflows from `data/recipes/catalog.json` in the configured knowledge root. The latter returns exact referenced ACE contracts with release/hash attribution and explicit gaps. Resolve example addon IDs to actual project names before editing. Catalogs are read as bounded data, with no command execution or database migration.
+
+Set `dryRun: true` on `add_event_block` or `update_event_block` to run the existing strict input, owner/behavior, configured ACE and load-rule gates on a copy. No file, backup or live ID reservation changes. A later apply repeats validation; preflight does not lock the project or prove picking, expressions or gameplay. Without a knowledge provider, the response says ACE checking is not configured.
+
+Current catalog counts: 84 project-only, 6 knowledge-only, 90 combined. Restart an already connected server after rebuilding. See [native project model](../Construct3-Knowledge/native-project-model.md) and [cycle acceptance](../Construct3-Knowledge/native-editing-cycle.md) for recipes, 2,068 passing tests, static corpus preservation and targeted native Editor proof. All work remains on `feature/construct3-knowledge`.
