@@ -6,6 +6,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ProjectReadError, type Construct3ProjectReader } from '../construct3/project-reader.js';
 import { withProjectSync } from './project-sync.js';
+import { registerObjectContextTool } from './object-context.js';
 
 /**
  * The name hint for a failed get_*_details read. A read that found the file
@@ -26,6 +27,7 @@ function nameHint(
 }
 
 export function registerQueryTools(mcpServer: McpServer, reader: Construct3ProjectReader) {
+  registerObjectContextTool(mcpServer, reader);
   const server = withProjectSync(mcpServer, reader);
   server.tool(
     'list_objects',
