@@ -298,6 +298,18 @@ export const DEFAULT_INSTANCE_PROPERTIES: Record<string, Record<string, unknown>
     origin: 'top-left',
     seams: 'overlap',
   },
+  Tilemap: {
+    'initially-visible': true,
+    'tile-width': 32,
+    'tile-height': 32,
+    'tile-x-offset': 0,
+    'tile-y-offset': 0,
+    'tile-x-spacing': 0,
+    'tile-y-spacing': 0,
+    'tile-x-drawing-offset': 0,
+    'tile-y-drawing-offset': 0,
+    'drawing-mode': 'top-to-right',
+  },
 };
 
 // ─── Instance Variable & Behavior Templates ─────────────────

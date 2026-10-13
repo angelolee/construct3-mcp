@@ -133,6 +133,7 @@ export async function validateProjectIntegrity(
   checkBuiltinObjectShapes(objects, errors);
   checkRequiredFieldsSheets(eventSheets, errors);
   checkRequiredFieldsLayouts(layouts, errors);
+  checkBuiltinInstanceShapes(layouts, objects, errors);
   checkNameConsistency(objects, eventSheets, layouts, errors);
   checkSubfolderStructure(project, errors);
   await checkLegacyBehaviorKeys(reader, eventSheets, objects, families, errors, warnings);
@@ -180,8 +181,9 @@ export async function validateProjectIntegrity(
   // expression-syntax, empty-expression, trigger-placement, else-placement,
   // duplicate-object-name, family-plugin-mismatch, file-name-case-mismatch,
   // duplicate-layer-name, missing-behavior-entry, missing-behavior-or-variable,
-  // frame-image, hierarchy-link, orphaned-image, duplicate-function-name
-  const checksRun = 30;
+  // frame-image, hierarchy-link, orphaned-image, duplicate-function-name,
+  // builtin-object-shape, plugin-instance-shape
+  const checksRun = 31;
 
   return {
     valid: errors.length === 0 && unscannedFiles.length === 0,
@@ -226,6 +228,27 @@ function checkBuiltinObjectShapes(objects: Map<string, ObjectType>, errors: Inte
         issue('plugin-resource-shape', `${object['plugin-id']} requires one animation with ${shape.fixedFrames} predefined image slots.`);
       }
     }
+  }
+}
+
+function checkBuiltinInstanceShapes(layouts: Map<string, Layout>, objects: Map<string, ObjectType>, errors: IntegrityIssue[]): void {
+  const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
+  for (const [name, layout] of layouts) {
+    forEachLayoutInstance(layout, instance => {
+      if (objects.get(instance.type)?.['plugin-id'] !== 'Tilemap') return;
+      const ownData = instance.ownData;
+      const data = record(ownData) ? ownData.tilemapData : undefined;
+      if (record(data) && typeof data.data === 'string' && ['width', 'height', 'max-width', 'max-height'].every(key => {
+        const value = data[key];
+        return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 0xffffffff;
+      })) return;
+      errors.push({
+        check: 'plugin-instance-shape',
+        entity: `layouts/${name}`,
+        message: `Tilemap instance "${instance.type}" (UID ${instance.uid}) requires ownData.tilemapData with integer dimensions and string tile data.`,
+        suggestion: 'Restore its ownData from an Editor save or recreate an empty instance with add_instance_to_layout; preserve existing painted tiles.',
+      });
+    });
   }
 }
 

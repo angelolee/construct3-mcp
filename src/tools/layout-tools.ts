@@ -384,7 +384,7 @@ export function registerLayoutTools({ server: mcpServer, reader, writer, idGen }
 
   server.tool(
     'add_instance_to_layout',
-    'Place an object instance on a layout layer or sub-layer. For copying instances between layouts, read the source with get_layout_details and pass instance properties here — all visual and behavioral properties (angle, color, instanceVariables, behaviors, etc.) are preserved when specified.',
+    'Place an object instance on a layout layer or sub-layer. For copying instances between layouts, read the source with get_layout_details and pass instance properties here — visual and behavioral properties (angle, color, instanceVariables, behaviors, etc.) are preserved when specified. Tilemap placement creates an empty tile grid; copying existing painted tiles or plugin ownData is not supported.',
     {
       layoutName: z.string().max(200).describe('Target layout'),
       layerName: z.string().max(200).describe('Target layer within layout (any layer or sub-layer, by name; a sub-layer can also be given by its path, e.g. "Main > HUD")'),
@@ -513,6 +513,31 @@ export function registerLayoutTools({ server: mcpServer, reader, writer, idGen }
             pluginProps,
             overrides,
           );
+
+          if (pluginId === 'Tilemap') {
+            const tileWidth = pluginProps['tile-width'];
+            const tileHeight = pluginProps['tile-height'];
+            if (typeof tileWidth !== 'number' || !Number.isSafeInteger(tileWidth) || tileWidth <= 0 ||
+                typeof tileHeight !== 'number' || !Number.isSafeInteger(tileHeight) || tileHeight <= 0) {
+              return toolError('Tilemap tile-width and tile-height must be positive integers. Nothing was changed.');
+            }
+            const columns = Math.max(1, Math.floor(args.width / tileWidth));
+            const rows = Math.max(1, Math.floor(args.height / tileHeight));
+            const cells = columns * rows;
+            if (!Number.isSafeInteger(cells) || columns > 0xffffffff || rows > 0xffffffff) {
+              return toolError('Tilemap dimensions exceed the supported integer range. Nothing was changed.');
+            }
+            // The Editor always calls the Tilemap loader with ownData; omitting it throws before the project opens.
+            instance.ownData = {
+              tilemapData: { width: columns, height: rows, 'max-width': columns, 'max-height': rows, data: cells === 1 ? '0' : `${cells}x0` },
+              'tile-width': tileWidth,
+              'tile-height': tileHeight,
+              'tile-x-offset': pluginProps['tile-x-offset'],
+              'tile-y-offset': pluginProps['tile-y-offset'],
+              'tile-x-spacing': pluginProps['tile-x-spacing'],
+              'tile-y-spacing': pluginProps['tile-y-spacing'],
+            };
+          }
 
           targetLayer.instances.push(instance);
         }
