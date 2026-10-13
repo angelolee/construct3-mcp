@@ -39,7 +39,7 @@ export function registerAnalysisTools(mcpServer: McpServer, reader: Construct3Pr
           detail: args.detail,
         });
         return {
-          content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+          content: [{ type: 'text' as const, text: JSON.stringify(result) }],
         };
       } catch (error) {
         return {
@@ -65,7 +65,7 @@ export function registerAnalysisTools(mcpServer: McpServer, reader: Construct3Pr
           detail: args.detail,
         });
         return {
-          content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+          content: [{ type: 'text' as const, text: JSON.stringify(result) }],
         };
       } catch (error) {
         return {
@@ -91,7 +91,7 @@ export function registerAnalysisTools(mcpServer: McpServer, reader: Construct3Pr
           detail: args.detail,
         });
         return {
-          content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+          content: [{ type: 'text' as const, text: JSON.stringify(result) }],
         };
       } catch (error) {
         return {
@@ -111,7 +111,7 @@ export function registerAnalysisTools(mcpServer: McpServer, reader: Construct3Pr
       try {
         const result = await findOrphanedObjects(reader);
         return {
-          content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+          content: [{ type: 'text' as const, text: JSON.stringify(result) }],
         };
       } catch (error) {
         return {
@@ -139,7 +139,7 @@ export function registerAnalysisTools(mcpServer: McpServer, reader: Construct3Pr
           detail: args.detail,
         });
         return {
-          content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+          content: [{ type: 'text' as const, text: JSON.stringify(result) }],
         };
       } catch (error) {
         return {
@@ -165,7 +165,7 @@ export function registerAnalysisTools(mcpServer: McpServer, reader: Construct3Pr
           detail: args.detail,
         });
         return {
-          content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+          content: [{ type: 'text' as const, text: JSON.stringify(result) }],
         };
       } catch (error) {
         return {
@@ -185,7 +185,7 @@ export function registerAnalysisTools(mcpServer: McpServer, reader: Construct3Pr
       try {
         const result = await validateProjectIntegrity(reader);
         return {
-          content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+          content: [{ type: 'text' as const, text: JSON.stringify(result) }],
         };
       } catch (error) {
         return {
@@ -213,7 +213,7 @@ export function registerAnalysisTools(mcpServer: McpServer, reader: Construct3Pr
           inactiveOnly: args.inactiveOnly,
         });
         return {
-          content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+          content: [{ type: 'text' as const, text: JSON.stringify(result) }],
         };
       } catch (error) {
         return {
@@ -324,7 +324,7 @@ export function registerAnalysisTools(mcpServer: McpServer, reader: Construct3Pr
           detail: args.detail,
         });
         return {
-          content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+          content: [{ type: 'text' as const, text: JSON.stringify(result) }],
         };
       } catch (error) {
         return {

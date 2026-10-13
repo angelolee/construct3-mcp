@@ -39,7 +39,7 @@ export function registerQueryTools(mcpServer: McpServer, reader: Construct3Proje
           ? reader.searchObjects(args.filter)
           : await reader.listObjectTypes();
         return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ count: objects.length, objects, filtered: !!args.filter }, null, 2) }],
+          content: [{ type: 'text' as const, text: JSON.stringify({ count: objects.length, objects, filtered: !!args.filter }) }],
         };
       } catch (error) {
         return {
@@ -58,7 +58,7 @@ export function registerQueryTools(mcpServer: McpServer, reader: Construct3Proje
       try {
         const eventSheets = await reader.listEventSheets();
         return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ count: eventSheets.length, eventSheets }, null, 2) }],
+          content: [{ type: 'text' as const, text: JSON.stringify({ count: eventSheets.length, eventSheets }) }],
         };
       } catch (error) {
         return {
@@ -77,7 +77,7 @@ export function registerQueryTools(mcpServer: McpServer, reader: Construct3Proje
       try {
         const layouts = await reader.listLayouts();
         return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ count: layouts.length, layouts }, null, 2) }],
+          content: [{ type: 'text' as const, text: JSON.stringify({ count: layouts.length, layouts }) }],
         };
       } catch (error) {
         return {
@@ -96,7 +96,7 @@ export function registerQueryTools(mcpServer: McpServer, reader: Construct3Proje
       try {
         const families = await reader.listFamilies();
         return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ count: families.length, families }, null, 2) }],
+          content: [{ type: 'text' as const, text: JSON.stringify({ count: families.length, families }) }],
         };
       } catch (error) {
         return {
@@ -115,7 +115,7 @@ export function registerQueryTools(mcpServer: McpServer, reader: Construct3Proje
       try {
         const objectData = await reader.readObjectType(args.name);
         return {
-          content: [{ type: 'text' as const, text: JSON.stringify(objectData, null, 2) }],
+          content: [{ type: 'text' as const, text: JSON.stringify(objectData) }],
         };
       } catch (error) {
         const hint = nameHint(reader, error, args.name, 'objects', 'list_objects');
@@ -135,7 +135,7 @@ export function registerQueryTools(mcpServer: McpServer, reader: Construct3Proje
       try {
         const eventSheetData = await reader.readEventSheet(args.name);
         return {
-          content: [{ type: 'text' as const, text: JSON.stringify(eventSheetData, null, 2) }],
+          content: [{ type: 'text' as const, text: JSON.stringify(eventSheetData) }],
         };
       } catch (error) {
         const hint = nameHint(reader, error, args.name, 'eventsheets', 'list_eventsheets');
@@ -155,7 +155,7 @@ export function registerQueryTools(mcpServer: McpServer, reader: Construct3Proje
       try {
         const layoutData = await reader.readLayout(args.name);
         return {
-          content: [{ type: 'text' as const, text: JSON.stringify(layoutData, null, 2) }],
+          content: [{ type: 'text' as const, text: JSON.stringify(layoutData) }],
         };
       } catch (error) {
         const hint = nameHint(reader, error, args.name, 'layouts', 'list_layouts');
@@ -175,7 +175,7 @@ export function registerQueryTools(mcpServer: McpServer, reader: Construct3Proje
       try {
         const results = reader.searchObjects(args.pattern);
         return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ pattern: args.pattern, count: results.length, results }, null, 2) }],
+          content: [{ type: 'text' as const, text: JSON.stringify({ pattern: args.pattern, count: results.length, results }) }],
         };
       } catch (error) {
         return {
@@ -219,7 +219,7 @@ export function registerQueryTools(mcpServer: McpServer, reader: Construct3Proje
         };
 
         return {
-          content: [{ type: 'text' as const, text: JSON.stringify(summary, null, 2) }],
+          content: [{ type: 'text' as const, text: JSON.stringify(summary) }],
         };
       } catch (error) {
         return {

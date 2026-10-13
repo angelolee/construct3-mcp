@@ -74,6 +74,26 @@ describe('toolResult', () => {
     expect(JSON.parse(result.content[0].text)).toEqual({ count: 1 });
   });
 
+  it('omits formatting whitespace without changing strings or write metadata', () => {
+    const result = toolResult({
+      success: true,
+      generatedSid: 123,
+      details: { text: '  "Hero"\n\tC:\\sprites\\ação.png  ', values: [null, false, 0] },
+      warnings: [' Keep both spaces  here. '],
+      coverage: { complete: false, truncated: true },
+    });
+    const text = result.content[0].text;
+    expect(text).not.toMatch(/[\r\n\t]/);
+    expect(JSON.parse(text)).toEqual({
+      success: true,
+      generatedSid: 123,
+      details: { text: '  "Hero"\n\tC:\\sprites\\ação.png  ', values: [null, false, 0] },
+      warnings: [' Keep both spaces  here. '],
+      coverage: { complete: false, truncated: true },
+      editorNote: EDITOR_RELOAD_NOTE,
+    });
+  });
+
   it('adds the editor reload note to a reported write', () => {
     const result = toolResult({ success: true, entity: 'Hero' });
     expect(result.content).toHaveLength(1);

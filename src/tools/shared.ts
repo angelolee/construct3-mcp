@@ -98,7 +98,7 @@ export function toolResult(data: unknown, options: ToolResultOptions = {}) {
     ? { ...(data as Record<string, unknown>), editorNote: EDITOR_RELOAD_NOTE }
     : data;
   return {
-    content: [{ type: 'text' as const, text: JSON.stringify(payload, null, 2) }],
+    content: [{ type: 'text' as const, text: JSON.stringify(payload) }],
   };
 }
 
