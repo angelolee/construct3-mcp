@@ -34,6 +34,7 @@ import {
   checkFamilyPlugins,
   checkObjectClassNames,
   createAceOriginResolver,
+  createSpriteAnimationOwnerResolver,
   classifySidDuplicate,
   describeAce,
   describeEvent,
@@ -140,15 +141,17 @@ export async function validateProjectIntegrity(
   await checkLegacyEventShapes(eventSheets, warnings);
 
   // Editor load-time rules (errors, or warnings where only partly verified)
-  const aceOrigin = createAceOriginResolver({
+  const aceData = {
     objects: objects as Map<string, Record<string, unknown>>,
     families,
     usedAddons: reader.getUsedAddons(),
     functionsName: functionsObjectName(reader),
-  });
+  };
+  const aceOrigin = createAceOriginResolver(aceData);
+  const spriteAnimationOwner = createSpriteAnimationOwnerResolver(aceData);
   for (const [name, sheet] of eventSheets) {
     if (!Array.isArray(sheet.events)) continue;
-    addLoadRuleIssues(checkEventLoadRules(sheet.events, { sheet: `eventSheets/${name}`, aceOrigin }), errors, warnings);
+    addLoadRuleIssues(checkEventLoadRules(sheet.events, { sheet: `eventSheets/${name}`, aceOrigin, spriteAnimationOwner }), errors, warnings);
   }
   addLoadRuleIssues(checkObjectClassNames(project), errors, warnings);
   addLoadRuleIssues(checkFamilyPlugins(families, objects as Map<string, Record<string, unknown>>), errors, warnings);

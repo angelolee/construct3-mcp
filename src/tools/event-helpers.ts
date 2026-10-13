@@ -52,11 +52,12 @@ import {
   checkEventLoadRules,
   collectTriggerObjectClasses,
   createAceOriginResolver,
+  createSpriteAnimationOwnerResolver,
   formatLoadRuleIssue,
   loadRuleErrorMessage,
   newLoadRuleIssues,
   systemOnlyAceOrigin,
-  type AceOriginResolver,
+  type EventCheckOptions,
 } from '../construct3/analyzers/load-rules.js';
 
 // ─── Zod Schemas ────────────────────────────────────────────
@@ -1105,14 +1106,14 @@ export function snapshotEvents(events: C3Event[]): C3Event[] {
   return JSON.parse(JSON.stringify(events)) as C3Event[];
 }
 
-/** Build an ACE origin resolver, reading only the object types that trigger-like conditions use. */
+/** Read only owners needed by trigger and animation-expression load checks. */
 async function loadAceOriginResolver(
   reader: Construct3ProjectReader,
   eventLists: C3Event[][],
-): Promise<AceOriginResolver> {
+): Promise<Omit<EventCheckOptions, 'sheet'>> {
   const names = new Set<string>();
   for (const events of eventLists) {
-    for (const name of collectTriggerObjectClasses(events)) names.add(name);
+    for (const name of collectTriggerObjectClasses(events, true)) names.add(name);
   }
 
   const objects = new Map<string, Record<string, unknown>>();
@@ -1134,12 +1135,13 @@ async function loadAceOriginResolver(
     }
   }
 
-  return createAceOriginResolver({
+  const data = {
     objects,
     families,
     usedAddons: reader.getUsedAddons(),
     functionsName: functionsObjectName(reader),
-  });
+  };
+  return { aceOrigin: createAceOriginResolver(data), spriteAnimationOwner: createSpriteAnimationOwnerResolver(data) };
 }
 
 /**
@@ -1156,18 +1158,17 @@ export async function checkLoadRulesBeforeWrite(
 ): Promise<{ errors: string[]; warnings: string[] }> {
   const sheet = `eventSheets/${sheetName}`;
 
-  // Which issues exist does not depend on ACE origin, only their severity does,
-  // so a sheet that is clean after the write needs no object type reads.
+  // Unknown owners produce candidate warnings; a clean first scan needs no object type reads.
   if (checkEventLoadRules(afterEvents, { sheet, aceOrigin: systemOnlyAceOrigin }).length === 0) {
     return { errors: [], warnings: [] };
   }
 
   // Otherwise compare with real origins: an edit can raise the severity of an
   // issue that already existed (e.g. a nested trigger gets a built-in root).
-  const aceOrigin = await loadAceOriginResolver(reader, [beforeEvents, afterEvents]);
+  const resolvers = await loadAceOriginResolver(reader, [beforeEvents, afterEvents]);
   const issues = newLoadRuleIssues(
-    checkEventLoadRules(beforeEvents, { sheet, aceOrigin }),
-    checkEventLoadRules(afterEvents, { sheet, aceOrigin }),
+    checkEventLoadRules(beforeEvents, { sheet, ...resolvers }),
+    checkEventLoadRules(afterEvents, { sheet, ...resolvers }),
   );
   return {
     errors: issues.filter(i => i.severity === 'error').map(formatLoadRuleIssue),
@@ -1222,10 +1223,10 @@ export async function checkLoadRulesBeforeSheetPairWrite(
     return { errors: [], warnings: [] };
   }
 
-  const aceOrigin = await loadAceOriginResolver(reader, sheets.flatMap(s => [s.before, s.after]));
+  const resolvers = await loadAceOriginResolver(reader, sheets.flatMap(s => [s.before, s.after]));
   const collect = (state: 'before' | 'after') => sheets.flatMap(s => {
     const sheet = label(s.name);
-    return checkEventLoadRules(s[state], { sheet, aceOrigin })
+    return checkEventLoadRules(s[state], { sheet, ...resolvers })
       .map(issue => ({ ...issue, key: sheetIndependentKey(issue.key, sheet) }));
   });
   const issues = newLoadRuleIssues(collect('before'), collect('after'));

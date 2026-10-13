@@ -49,6 +49,8 @@ export interface EventCheckOptions {
   /** Location prefix, e.g. `eventSheets/Main` */
   sheet: string;
   aceOrigin: AceOriginResolver;
+  /** Undefined means the owner has not been loaded; candidate animation syntax issues then remain warnings. */
+  spriteAnimationOwner?: (ace: Record<string, unknown>) => boolean | undefined;
 }
 
 // ─── Constants ───────────────────────────────────────────────
@@ -90,6 +92,13 @@ function preview(value: string): string {
   return value.length > PREVIEW_LENGTH ? `${value.slice(0, PREVIEW_LENGTH)}…` : value;
 }
 
+function spriteAnimationParameter(ace: Record<string, unknown>): string | undefined {
+  if (ace.behaviorType !== undefined || ace['behavior-type'] !== undefined) return undefined;
+  if (ace.id === 'add-remove-animation') return 'name';
+  if (['is-animation-playing', 'on-animation-finished', 'set-animation', 'add-remove-animation-frame'].includes(String(ace.id))) return 'animation';
+  return undefined;
+}
+
 /** Label of a condition or action within its event, e.g. `action 0 "wait" (System)`. */
 export function describeAce(ace: Record<string, unknown>, kind: 'condition' | 'action', index: number): string {
   if (typeof ace.callFunction === 'string') return `${kind} ${index} (call function "${ace.callFunction}")`;
@@ -101,9 +110,9 @@ export function describeAce(ace: Record<string, unknown>, kind: 'condition' | 'a
 /**
  * Check the expression parameters of one condition or action (rules 1 and 2).
  * Parameters are a dict for ordinary ACEs and an argument array for function and
- * custom action calls. Only string values are expressions: numbers, booleans and
- * objects ({ path }, { name, objectClass }) are not. Script actions hold
- * JavaScript, not C3 expressions, and are skipped.
+ * custom action calls. General syntax checks inspect strings; Sprite animation
+ * parameters also require that serialized type. Other values and script actions
+ * are skipped by these expression checks.
  */
 function checkAceParameters(
   ace: Record<string, unknown>,
@@ -111,6 +120,7 @@ function checkAceParameters(
   location: string,
   keyBase: string,
   out: LoadRuleIssue[],
+  spriteOwner: boolean | undefined,
 ): void {
   if (ace.type === 'script') return;
   const params = ace.parameters;
@@ -121,8 +131,32 @@ function checkAceParameters(
       : [];
 
   for (const [name, value] of entries) {
-    if (typeof value !== 'string') continue;
     const key = `${keyBase}|${name}|${value}`;
+    if (spriteOwner !== false && name === spriteAnimationParameter(ace) && typeof value !== 'string') {
+      out.push({
+        rule: 'expression-syntax',
+        severity: spriteOwner === true ? 'error' : 'warning',
+        location,
+        message: `Animation parameter "${name}" of ${label} requires a serialized expression string; the Editor cannot load this value's type.`,
+        suggestion: 'Pass expression text as a JSON string, including for numeric expressions; quote literal animation names inside that string.',
+        key: `expression-syntax|${key}`,
+      });
+      continue;
+    }
+    if (typeof value !== 'string') continue;
+
+    // This only detects the demonstrated bare-label form, not the complete Construct expression grammar.
+    if (spriteOwner !== false && name === spriteAnimationParameter(ace) && /^\s*[A-Za-z_]\w*\s+\d+(?:\.\d+)?\s*$/.test(value)) {
+      out.push({
+        rule: 'expression-syntax',
+        severity: spriteOwner === true ? 'error' : 'warning',
+        location,
+        message: `Animation parameter "${name}" of ${label} has adjacent identifier and number tokens without an operator: ${preview(value)}.`,
+        suggestion: 'Animation parameters contain Construct expressions. Quote a literal name (e.g. "Animation 1") or provide a valid dynamic expression.',
+        key: `expression-syntax|${key}`,
+      });
+      continue;
+    }
 
     // Rule 2: no real project stores "" in any parameter (0 of 108k string
     // values across 755 sheets, incl. Scirra's example projects); an empty
@@ -466,13 +500,13 @@ export function checkEventLoadRules(events: C3Event[], opts: EventCheckOptions):
     conditions.forEach((c, i) => {
       if (!isObject(c)) return;
       const label = describeAce(c, 'condition', i);
-      checkAceParameters(c, label, `${location} > ${label}`, `${keyBase}|c${aceId(c)}`, out);
+      checkAceParameters(c, label, `${location} > ${label}`, `${keyBase}|c${aceId(c)}`, out, opts.spriteAnimationOwner?.(c));
     });
     const actions = Array.isArray(event.actions) ? event.actions as unknown[] : [];
     actions.forEach((a, i) => {
       if (!isObject(a)) return;
       const label = describeAce(a, 'action', i);
-      checkAceParameters(a, label, `${location} > ${label}`, `${keyBase}|a${aceId(a)}`, out);
+      checkAceParameters(a, label, `${location} > ${label}`, `${keyBase}|a${aceId(a)}`, out, opts.spriteAnimationOwner?.(a));
     });
 
     // Groups (and other condition-less events) are transparent to the branch.
@@ -485,8 +519,8 @@ export function checkEventLoadRules(events: C3Event[], opts: EventCheckOptions):
   return out;
 }
 
-/** Object classes of trigger-like conditions (for loading only what origin lookups need). */
-export function collectTriggerObjectClasses(events: C3Event[]): Set<string> {
+/** Object classes whose trigger or optional animation-expression checks need owner lookups. */
+export function collectTriggerObjectClasses(events: C3Event[], includeAnimationExpressions = false): Set<string> {
   const names = new Set<string>();
   const stack: Array<{ list: unknown; depth: number }> = [{ list: events, depth: 0 }];
   let nodes = 0;
@@ -499,9 +533,14 @@ export function collectTriggerObjectClasses(events: C3Event[]): Set<string> {
       const rec = ev as Record<string, unknown>;
       if (Array.isArray(rec.conditions)) {
         for (const c of rec.conditions as Array<Record<string, unknown>>) {
-          if (c && isTriggerId(c.id) && typeof c.objectClass === 'string' && c.objectClass !== 'System') {
+          if (c && (isTriggerId(c.id) || (includeAnimationExpressions && spriteAnimationParameter(c))) && typeof c.objectClass === 'string' && c.objectClass !== 'System') {
             names.add(c.objectClass);
           }
+        }
+      }
+      if (includeAnimationExpressions && Array.isArray(rec.actions)) {
+        for (const action of rec.actions as Array<Record<string, unknown>>) {
+          if (action && spriteAnimationParameter(action) && typeof action.objectClass === 'string') names.add(action.objectClass);
         }
       }
       stack.push({ list: rec.children, depth: depth + 1 });
@@ -616,6 +655,18 @@ export function createAceOriginResolver(data: AceOriginData): AceOriginResolver 
     const author = authors.get(addonKey);
     if (author === undefined) return 'unknown';
     return author === 'Scirra' ? 'builtin' : 'addon';
+  };
+}
+
+export function createSpriteAnimationOwnerResolver(data: AceOriginData): NonNullable<EventCheckOptions['spriteAnimationOwner']> {
+  const origin = createAceOriginResolver(data);
+  return ace => {
+    if (!spriteAnimationParameter(ace) || typeof ace.objectClass !== 'string') return false;
+    const owner = data.objects.get(ace.objectClass) ?? data.families.get(ace.objectClass);
+    if (!owner) return undefined;
+    if (owner['plugin-id'] !== 'Sprite') return false;
+    const source = origin(ace);
+    return source === 'unknown' ? undefined : source === 'builtin';
   };
 }
 

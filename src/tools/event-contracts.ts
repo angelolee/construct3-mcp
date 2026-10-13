@@ -99,12 +99,14 @@ export async function validateEventContracts(
             if (typeof value !== 'string' || !items.includes(value)) throw new Error(`Parameter "${parameter.id}" requires a canonical combo item: ${items.join(', ')}`);
           } else if (parameter.type === 'cmp') {
             if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 5) throw new Error(`Parameter "${parameter.id}" requires a numeric cmp index from 0 to 5`);
+          } else if (parameter.type === 'animation') {
+            if (typeof value !== 'string') throw new Error(`Parameter "${parameter.id}" requires a serialized Construct expression string`);
           } else if (['number', 'string', 'any', 'layer', 'groupname', 'template', 'objectname', 'layereffect', 'layouteffect', 'objecteffect',
             'functionname', 'animationframe', 'model3d-string', 'model3d-mesh-string', 'model3d-animation-string', 'tilemapbrush-string',
             'flowchart-string', 'objectinsttags'].includes(parameter.type)) {
             if (!(typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value)))) throw new Error(`Parameter "${parameter.id}" requires an expression string or finite number`);
           } else if (['object', 'layout', 'instancevar', 'instancevarbool', 'eventvar', 'eventvarbool', 'eventvarany', 'function', 'projectfile',
-            'audiofile', 'animation', 'timeline', 'ease', 'model3d', 'tilemapbrush', 'flowchart'].includes(parameter.type)) {
+            'audiofile', 'timeline', 'ease', 'model3d', 'tilemapbrush', 'flowchart'].includes(parameter.type)) {
             if (typeof value !== 'string') throw new Error(`Parameter "${parameter.id}" requires a ${parameter.type} reference string`);
             if (parameter.type === 'object' && !families.has(value) && !(await reader.listObjectTypes()).includes(value)) throw new Error(`Unknown object reference "${value}"`);
             if (parameter.type === 'layout' && !(await reader.listLayouts()).includes(value)) throw new Error(`Unknown layout reference "${value}"`);
