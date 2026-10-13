@@ -33,7 +33,7 @@ describe('Object Templates', () => {
     expect(obj.animations!.items[0].sid).toBe(200);
     expect(obj.animations!.items[0].name).toBe('Animation 1');
     expect(obj.animations!.items[0].frames).toHaveLength(1);
-    expect(obj.animations!.items[0].frames[0].collisionPoly).toEqual({ points: [] });
+    expect(obj.animations!.items[0].frames[0].collisionPoly).toBeUndefined();
     expect(obj.instanceVariables).toEqual([]);
     expect(obj.behaviorTypes).toEqual([]);
     expect(obj.effectTypes).toEqual([]);
@@ -67,7 +67,7 @@ describe('Object Templates', () => {
     expect(obj.sid).toBe(100);
     expect((obj as any).image).toBeDefined();
     expect((obj as any).image.width).toBe(100);
-    expect((obj as any).image.collisionPoly).toEqual({ points: [] });
+    expect((obj as any).image.collisionPoly).toBeUndefined();
   });
 
   it('createTiledBgObject passes through imageSpriteId', () => {
@@ -244,7 +244,7 @@ describe('Animation Templates', () => {
     expect(frame.fileType).toBe('image/png');
     expect(frame.duration).toBe(1);
     expect(frame.useCollisionPoly).toBe(true);
-    expect(frame.collisionPoly).toEqual({ points: [] });
+    expect(frame.collisionPoly).toBeUndefined();
   });
 
   it('createAnimationFrame includes imageSpriteId when provided', () => {

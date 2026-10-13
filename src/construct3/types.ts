@@ -474,6 +474,7 @@ export interface Instance {
     originY?: number;
     color?: number[];
     angle?: number;
+    z?: number;
     zElevation?: number;
     blendMode?: string;
     [key: string]: unknown;

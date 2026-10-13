@@ -98,8 +98,20 @@ export const KNOWN_SCIRRA_PLUGINS: Record<string, string> = {
  */
 export const KNOWN_SCIRRA_BEHAVIORS: Record<string, string> = {
   '8Direction': '8 Direction',
+  EightDir: '8 Direction',
+  Billboard: 'Billboard',
+  custom: 'Custom',
+  destroy: 'Destroy outside layout',
+  DragnDrop: 'Drag & Drop',
+  Follow: 'Follow',
+  NoSave: 'No save',
+  Persist: 'Persist',
+  scrollto: 'Scroll To',
+  solid: 'Solid',
+  TileMovement: 'Tile movement',
+  wrap: 'Wrap',
   Anchor: 'Anchor',
-  bound: 'Bound to layout',
+  bound: 'Bound to',
   Bullet: 'Bullet',
   Car: 'Car',
   'destroy-outside-layout': 'Destroy outside layout',
@@ -187,7 +199,6 @@ export function createTiledBgObject(name: string, sid: number, imageSpriteId?: n
       fileType: 'image/png',
       tag: '',
       useCollisionPoly: true,
-      collisionPoly: { points: [] },
       ...(imageSpriteId !== undefined ? { imageSpriteId } : {}),
     },
   };
@@ -321,7 +332,7 @@ export function createBehavior(
  * Source: the property definitions (id + initial value) in the Construct 3
  * r449 editor's behaviors/allEditorBehaviors.js, which editor.construct.net
  * serves publicly. r495.2 only adds properties (Physics collision filter,
- * Rotate rotation-type, Solid use-instance-tags) and changes none of these.
+ * Rotate rotation-type and Solid use-instance-tags, without changing the older defaults.
  * Key sets and order match the entries in Scirra's public example projects
  * (github.com/Scirra/Construct-Example-Projects). Behaviors without
  * properties map to {} — the editor writes them as { properties: {} }.
@@ -331,7 +342,7 @@ export const BEHAVIOR_INSTANCE_DEFAULTS: Readonly<Record<string, Readonly<Record
     'left-edge': 'window-left', 'top-edge': 'window-top', 'right-edge': 'none', 'bottom-edge': 'none',
     enabled: true,
   },
-  bound: { 'bound-by': 'edge' },
+  bound: { 'bound-by': 'edge', region: 'layout' },
   Bullet: {
     speed: 400, acceleration: 0, gravity: 0, 'bounce-off-solids': false, 'set-angle': true, step: false,
     enabled: true,
@@ -556,7 +567,6 @@ export function createAnimationFrame(
     duration: 1,
     tag: '',
     useCollisionPoly: true,
-    collisionPoly: { points: [] },
     ...(imageSpriteId !== undefined ? { imageSpriteId } : {}),
   };
 }
@@ -689,7 +699,7 @@ export function createInstance(
       originY: overrides?.originY ?? 0.5,
       color: overrides?.color ?? [1, 1, 1, 1],
       angle: overrides?.angle ?? 0,
-      zElevation: overrides?.zElevation ?? 0,
+      z: overrides?.zElevation ?? 0,
     },
   };
 }

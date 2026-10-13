@@ -395,7 +395,7 @@ export function registerLayoutTools({ server: mcpServer, reader, writer, idGen }
       properties: boundedRecord()
         .refine(obj => JSON.stringify(obj).length <= 50_000, 'Properties payload too large (max 50KB)')
         .optional()
-        .describe('Plugin-specific instance properties — auto-filled for known plugins if omitted (max 100 keys, depth 6)'),
+        .describe('Plugin-specific instance properties — overrides merged with known creation defaults (max 100 keys, depth 6)'),
       // Instance-level overrides
       angle: z.number().optional().describe('Rotation angle in radians (default: 0)'),
       color: z.array(z.number().min(0).max(1)).length(4).optional().describe('RGBA tint as [r, g, b, a] with values 0-1 (default: [1,1,1,1])'),
@@ -502,9 +502,7 @@ export function registerLayoutTools({ server: mcpServer, reader, writer, idGen }
           const targetLayer = resolved.entry.layer;
           if (!Array.isArray(targetLayer.instances)) targetLayer.instances = [];
 
-          const pluginProps = args.properties
-            ?? (pluginId ? DEFAULT_INSTANCE_PROPERTIES[pluginId] : undefined)
-            ?? {};
+          const pluginProps = { ...(pluginId ? DEFAULT_INSTANCE_PROPERTIES[pluginId] : {}), ...args.properties };
 
           if (!args.properties && pluginId && !DEFAULT_INSTANCE_PROPERTIES[pluginId]) {
             warnings.push(`No default instance properties known for plugin "${pluginId}". Instance created with empty properties — you may need to configure them in the C3 editor.`);
@@ -1062,7 +1060,10 @@ export function registerLayoutTools({ server: mcpServer, reader, writer, idGen }
           if (args.width !== undefined) inst.world.width = args.width;
           if (args.height !== undefined) inst.world.height = args.height;
           if (args.angle !== undefined) inst.world.angle = args.angle;
-          if (args.zElevation !== undefined) inst.world.zElevation = args.zElevation;
+          if (args.zElevation !== undefined) {
+            inst.world.z = args.zElevation;
+            delete inst.world.zElevation;
+          }
           if (args.color !== undefined) inst.world.color = args.color;
         }
         if (args.showing !== undefined) inst.showing = args.showing;

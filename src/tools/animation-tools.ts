@@ -713,7 +713,7 @@ export function registerAnimationTools({ server: mcpServer, reader, writer, idGe
 
   server.tool(
     'update_frame',
-    'Update per-frame properties of a Sprite animation frame (duration, dimensions, origin)',
+    'Update per-frame properties of a Sprite animation frame (duration, dimensions, origin, collision geometry)',
     {
       objectName: z.string().max(200).describe('Sprite object name'),
       animationName: z.string().min(1).max(200).describe('Animation name'),
@@ -723,13 +723,19 @@ export function registerAnimationTools({ server: mcpServer, reader, writer, idGe
       duration: z.number().positive().optional().describe('New frame duration in seconds'),
       originX: z.number().min(0).max(1).optional().describe('Horizontal origin 0-1 (0.5 = center)'),
       originY: z.number().min(0).max(1).optional().describe('Vertical origin 0-1 (0.5 = center)'),
+      collisionPoints: z.array(z.number().finite().min(0).max(1)).min(6).max(64)
+        .refine(points => points.length % 2 === 0, 'Collision points must be x/y pairs')
+        .refine(points => new Set(points.reduce<string[]>((pairs, value, i) => i % 2 ? pairs : [...pairs, `${value},${points[i + 1]}`], [])).size >= 3, 'Collision polygon needs at least three distinct vertices')
+        .optional().describe('Normalized x/y pairs for 3-32 collision vertices; full rectangle is [0,0,1,0,1,1,0,1]'),
+      useCollisionPoly: z.boolean().optional().describe('Whether to use the frame collision polygon'),
     },
     oneAtATime(async (args) => {
       try {
         const hasUpdates = args.width !== undefined || args.height !== undefined ||
-          args.duration !== undefined || args.originX !== undefined || args.originY !== undefined;
+          args.duration !== undefined || args.originX !== undefined || args.originY !== undefined ||
+          args.collisionPoints !== undefined || args.useCollisionPoly !== undefined;
         if (!hasUpdates) {
-          return toolError('No updates provided. Specify at least one of: width, height, duration, originX, originY.');
+          return toolError('No updates provided. Specify at least one of: width, height, duration, originX, originY, collisionPoints, useCollisionPoly.');
         }
 
         let obj: ObjectType;
@@ -761,6 +767,8 @@ export function registerAnimationTools({ server: mcpServer, reader, writer, idGe
         if (args.duration !== undefined) frame.duration = args.duration;
         if (args.originX !== undefined) frame.originX = args.originX;
         if (args.originY !== undefined) frame.originY = args.originY;
+        if (args.collisionPoints !== undefined) frame.collisionPoly = { points: args.collisionPoints };
+        if (args.useCollisionPoly !== undefined) frame.useCollisionPoly = args.useCollisionPoly;
 
         const subfolder = writer.getSubfolderForEntity('objectTypes', args.objectName);
         const backupPath = await writer.writeEntityFile('objectTypes', args.objectName, obj, subfolder);

@@ -197,7 +197,7 @@ Event SIDs are not always unique in editor-saved sheets. The tools that find an 
 | `rename_animation` | Rename an animation with its frame image files and the layout instances starting with it |
 | `delete_animation` | Delete an animation (never the last one) |
 | `add_frame_to_animation` | Add a blank frame (placeholder PNG) at an index; later frame images move up with their frames |
-| `update_frame` | Update a frame's duration, size or origin |
+| `update_frame` | Update duration, size, origin, collision points or polygon use |
 | `delete_frame_from_animation` | Delete a frame by index (never the last one); its image is kept as `.bak`, later frame images move down |
 | `replace_sprite_image` | Replace a frame's image with base64 PNG data |
 
@@ -737,3 +737,14 @@ With local knowledge enabled, `search_construct_recipes` and `get_construct_reci
 Set `dryRun: true` on `add_event_block` or `update_event_block` to run the existing strict input, owner/behavior, configured ACE and load-rule gates on a copy. No file, backup or live ID reservation changes. A later apply repeats validation; preflight does not lock the project or prove picking, expressions or gameplay. Without a knowledge provider, the response says ACE checking is not configured.
 
 Current catalog counts: 84 project-only, 6 knowledge-only, 90 combined. Restart an already connected server after rebuilding. See [native project model](../Construct3-Knowledge/native-project-model.md) and [cycle acceptance](../Construct3-Knowledge/native-editing-cycle.md) for recipes, 2,068 passing tests, static corpus preservation and targeted native Editor proof. All work remains on `feature/construct3-knowledge`.
+
+
+### Native Editor compatibility learned from Native Circuit
+
+`update_frame` accepts `collisionPoints` as normalized flat x/y pairs (3–32 distinct vertices, with at least three distinct positions) and optional `useCollisionPoly`. For example, `[0,0,1,0,0.5,1]` authors a triangle; `[0,0,1,0,1,1,0,1]` restores the full rectangle. Invalid/out-of-range/non-finite values are refused before writing. Other frame fields and image IDs are retained, and writes keep the usual backup. New frame/single-image templates omit the rectangle, as the r495.2 Editor does, rather than authoring an empty polygon. Images still begin as transparent placeholders and must be supplied separately.
+
+`add_instance_to_layout` merges partial plugin properties over the known creation defaults. Missing saved properties can use different Editor load defaults (for example Text BBCode), so readback comparisons must distinguish creation from loading. The public `zElevation` argument remains unchanged for add/update instance; it now writes the Editor's `world.z`. Layers continue to use `layer.zElevation`. Existing instance data is preserved unless that elevation is explicitly updated.
+
+Canonical built-in behavior IDs such as `EightDir`, `DragnDrop`, `solid`, `scrollto` and `wrap` auto-register; use these actual IDs rather than display labels. `bound` includes the observed `region: "layout"` default. Legacy map entries remain for compatibility, but existing warnings still identify incorrect/noncanonical behavior IDs.
+
+These findings come from the dedicated Native Circuit r495.2 Save As/readback and public serialization definitions. They do not establish universal Editor/runtime acceptance for every plugin, external service or export target.
