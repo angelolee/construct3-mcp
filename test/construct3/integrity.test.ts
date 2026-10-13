@@ -20,7 +20,13 @@ import { getAssetUsage } from '../../src/construct3/analyzers/asset-usage.js';
 // Cast MockReader to 'any' since it implements the same interface as Construct3ProjectReader
 // but is not a class instance of it.
 function createReader(data: ConstructorParameters<typeof MockReader>[0] = {}) {
-  return new MockReader(data) as any;
+  // Keep unrelated integrity fixtures valid under the Editor's mandatory Sprite resource shape.
+  const objects = data.objects && new Map([...data.objects].map(([name, object], index) => [name,
+    object['plugin-id'] === 'Sprite' && object.animations === undefined
+      ? { ...object, animations: { items: [{ name: 'Animation 1', sid: index + 1000000, frames: [{ width: 1, height: 1 }] }], subfolders: [] } }
+      : object,
+  ]));
+  return new MockReader({ ...data, objects }) as any;
 }
 
 /** Minimal valid project data */
@@ -63,7 +69,7 @@ describe('validateProjectIntegrity', () => {
     expect(result.valid).toBe(true);
     expect(result.complete).toBe(true);
     expect(result.summary.errors).toBe(0);
-    expect(result.summary.checksRun).toBe(29);
+    expect(result.summary.checksRun).toBe(30);
     expect(result.summary.entitiesScanned).toBeGreaterThan(0);
   });
 

@@ -6,6 +6,8 @@
  * Key conventions: C3 uses camelCase for most fields (isGlobal, not is-global).
  */
 
+import { BUILTIN_PLUGIN_SHAPES } from './builtin-plugin-shapes.js';
+
 import type {
   ObjectType,
   Layout,
@@ -53,6 +55,7 @@ export const RESERVED_NAMES = new Set([
  * Used to auto-register addons in usedAddons when creating objects.
  */
 export const KNOWN_SCIRRA_PLUGINS: Record<string, string> = {
+  ...Object.fromEntries(Object.keys(BUILTIN_PLUGIN_SHAPES).filter(id => id !== 'system').map(id => [id, id])),
   AJAX: 'AJAX',
   Arr: 'Array',
   Audio: 'Audio',

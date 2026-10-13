@@ -18,7 +18,8 @@ type Json = Record<string, any>;
 const variable = (name: string, sid: number) => ({ name, type: 'number', initialValue: 0, desc: '', sid });
 const behavior = (name: string, sid: number, behaviorId = name) => ({ behaviorId, name, sid });
 const sprite = (name: string, sid: number, extra: Json = {}): [string, Json] =>
-  [name, { name, 'plugin-id': 'Sprite', sid, instanceVariables: [], behaviorTypes: [], ...extra }];
+  [name, { name, 'plugin-id': 'Sprite', sid, instanceVariables: [], behaviorTypes: [],
+    animations: { items: [{ name: 'Animation 1', sid: sid + 1000000, frames: [{ width: 1, height: 1 }] }], subfolders: [] }, ...extra }];
 const family = (name: string, sid: number, members: string[], extra: Json = {}): [string, Json] =>
   [name, { name, 'plugin-id': 'Sprite', sid, instanceVariables: [], behaviorTypes: [], effectTypes: [], members, ...extra }];
 const sheet = (events: Json[]): Map<string, Json> => new Map([['Sheet1', { name: 'Sheet1', sid: 900, events }]]);

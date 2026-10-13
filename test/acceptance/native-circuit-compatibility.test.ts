@@ -81,3 +81,39 @@ describe('Native Circuit Editor compatibility', () => {
     expect(behaviors.Bounds.properties.region).toBe('layout');
   });
 });
+
+describe('Editor-required builtin object shapes',()=> {
+  let folder:string;let reader:Construct3ProjectReader;let server:MockServer;
+  const call=async(name:string,args:Record<string,unknown>)=>{const r=await server.callTool(name,args);expect(r.isError,r.content[0]?.text).not.toBe(true);return JSON.parse(r.content[0].text);};
+  beforeEach(async()=>{
+    folder=await mkdtemp(join(tmpdir(),'c3-editor-shapes-'));await cp(join(__dirname,'../fixtures/c3-loadable-minimal'),folder,{recursive:true});
+    reader=new Construct3ProjectReader(join(folder,'project.c3proj'));await reader.loadProject();const ids=new IdGenerator();await ids.initialize(reader);server=new MockServer();registerMutationTools(server as any,reader,new Construct3ProjectWriter(reader,ids),ids);
+    await call('create_layout',{name:'Lab',width:640,height:480});
+  });
+  afterEach(async()=>{await rm(folder,{recursive:true,force:true});});
+  for(const pluginId of ['NinePatch','Particles','Spritefont2','Tilemap'])it('creates the required image for '+pluginId,async()=>{
+    await call('register_addon',{type:'plugin',id:pluginId,name:pluginId});await call('create_object',{name:'ImageType',pluginId});
+    const object=await reader.readObjectType('ImageType');const image=object.image as any;
+    expect(image).toBeTruthy();expect(image.imageSpriteId).toEqual(expect.any(Number));expect(image.width).toBeGreaterThan(0);
+    expect((await readFile(join(folder,'images/imagetype.png'))).subarray(0,8)).toEqual(Buffer.from([137,80,78,71,13,10,26,10]));
+    if(pluginId==='Tilemap')expect(object['tile-collision-polys']).toEqual({});
+  });
+  it('creates all six Shape3D faces with distinct image identities',async()=>{
+    await call('register_addon',{type:'plugin',id:'Shape3D',name:'3D Shape'});await call('create_object',{name:'Cube',pluginId:'Shape3D'});
+    const object=await reader.readObjectType('Cube');expect(object.animations?.items).toHaveLength(1);
+    const frames=object.animations!.items[0].frames;expect(frames).toHaveLength(6);expect(new Set(frames.map(f=>f.imageSpriteId)).size).toBe(6);
+    for(let i=0;i<6;i++)expect((await readFile(join(folder,'images/cube-animation 1-'+String(i).padStart(3,'0')+'.png'))).length).toBeGreaterThan(0);
+  });
+  it('keeps global Sprite instances on world layers rather than inventing a singleton',async()=>{
+    await call('create_object',{name:'GlobalSprite',pluginId:'Sprite',isGlobal:true});const object=await reader.readObjectType('GlobalSprite');
+    expect(object.isGlobal).toBe(true);expect(object['singleglobal-inst']).toBeUndefined();expect(object.animations?.items.length).toBe(1);
+    await call('add_instance_to_layout',{layoutName:'Lab',layerName:'Layer 0',objectType:'GlobalSprite',x:12,y:16});
+    expect((await reader.readLayout('Lab')).layers[0].instances[0].world).toBeTruthy();
+  });
+  for(const pluginId of ['Cryptography','BinaryData','XML','Flowchart'])it('places '+pluginId+' as a nonworld instance even when isGlobal is false',async()=>{
+    await call('register_addon',{type:'plugin',id:pluginId,name:pluginId});await call('create_object',{name:'DataType',pluginId});await call('update_object_properties',{name:'DataType',isGlobal:false});
+    const object=await reader.readObjectType('DataType');expect(object['singleglobal-inst']).toBeUndefined();
+    await call('add_instance_to_layout',{layoutName:'Lab',layerName:'Layer 0',objectType:'DataType',x:12,y:16});
+    const layout=await reader.readLayout('Lab');expect(layout['nonworld-instances']?.some(i=>i.type==='DataType')).toBe(true);expect(layout.layers[0].instances).toHaveLength(0);
+  });
+});

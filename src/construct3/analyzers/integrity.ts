@@ -27,6 +27,7 @@ import { namedAfterAnyObject } from '../object-images.js';
 import type { BehaviorLookupData } from './behavior-refs.js';
 import { everyAnimation, expectedFrameImageName, frameImageBaseName, indexImageFiles } from '../animation-rename.js';
 import { nameKey } from '../names.js';
+import { builtinPluginShape } from '../builtin-plugin-shapes.js';
 import { duplicateFunctionNames, functionBlockNames } from '../event-variable-names.js';
 import {
   checkEventLoadRules,
@@ -129,6 +130,7 @@ export async function validateProjectIntegrity(
   checkFileExistence(registeredLayouts, layouts, layoutFailures, 'layouts', reader, errors, warnings, unscannedFiles);
   checkFileExistence(registeredFamilies, families, familyFailures, 'families', reader, errors, warnings, unscannedFiles);
   checkRequiredFieldsObjects(objects, errors);
+  checkBuiltinObjectShapes(objects, errors);
   checkRequiredFieldsSheets(eventSheets, errors);
   checkRequiredFieldsLayouts(layouts, errors);
   checkNameConsistency(objects, eventSheets, layouts, errors);
@@ -179,7 +181,7 @@ export async function validateProjectIntegrity(
   // duplicate-object-name, family-plugin-mismatch, file-name-case-mismatch,
   // duplicate-layer-name, missing-behavior-entry, missing-behavior-or-variable,
   // frame-image, hierarchy-link, orphaned-image, duplicate-function-name
-  const checksRun = 29;
+  const checksRun = 30;
 
   return {
     valid: errors.length === 0 && unscannedFiles.length === 0,
@@ -197,6 +199,34 @@ export async function validateProjectIntegrity(
     info,
     unscannedFiles,
   };
+}
+
+function checkBuiltinObjectShapes(objects: Map<string, ObjectType>, errors: IntegrityIssue[]): void {
+  const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
+  const frameValid = (value: unknown) => record(value) && typeof value.width === 'number' && Number.isFinite(value.width) && value.width > 0 &&
+    typeof value.height === 'number' && Number.isFinite(value.height) && value.height > 0;
+  for (const [name, object] of objects) {
+    const shape = builtinPluginShape(object['plugin-id']);
+    if (!shape) continue;
+    const issue = (check: string, message: string) => errors.push({ check, entity: `objectTypes/${name}`, message,
+      suggestion: 'Restore the plugin-specific object/resource shape from a compatible Editor save or recreate it with the current MCP.' });
+    if (shape.kind === 'singleton' && !record(object['singleglobal-inst'])) issue('plugin-object-shape', `${object['plugin-id']} requires a singleglobal-inst record.`);
+    if (shape.kind !== 'singleton' && object['singleglobal-inst'] !== undefined) issue('plugin-object-shape', `${object['plugin-id']} is ${shape.kind}, not a singleton; singleglobal-inst is invalid.`);
+    if (shape.asset === 'image' && !frameValid(object.image)) issue('plugin-resource-shape', `${object['plugin-id']} requires an image record with positive finite dimensions.`);
+    if (shape.asset === 'animations') {
+      if (!record(object.animations) || !Array.isArray(object.animations.items)) {
+        issue('plugin-resource-shape', `${object['plugin-id']} requires an animations container.`);
+        continue;
+      }
+      const animations = [...everyAnimation<{ name?: unknown; frames?: unknown }>(object.animations)];
+      if (!animations.length || animations.some(animation => !Array.isArray(animation.frames) || !animation.frames.length || animation.frames.some(frame => !frameValid(frame)))) {
+        issue('plugin-resource-shape', `${object['plugin-id']} requires nonempty animation frames with positive finite dimensions.`);
+      }
+      if (shape.fixedFrames && (animations.length !== 1 || !Array.isArray(animations[0].frames) || animations[0].frames.length !== shape.fixedFrames)) {
+        issue('plugin-resource-shape', `${object['plugin-id']} requires one animation with ${shape.fixedFrames} predefined image slots.`);
+      }
+    }
+  }
 }
 
 // ─── Helpers ─────────────────────────────────────────────────

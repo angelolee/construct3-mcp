@@ -59,6 +59,7 @@ import {
 } from '../construct3/layer-references.js';
 import { EntityWriteError, filesLeftClause } from '../construct3/project-writer.js';
 import { StaleFileError } from '../construct3/disk-state.js';
+import { builtinPluginShape } from '../construct3/builtin-plugin-shapes.js';
 import { withProjectSync } from './project-sync.js';
 
 /**
@@ -428,10 +429,9 @@ export function registerLayoutTools({ server: mcpServer, reader, writer, idGen }
           if (obj['singleglobal-inst']) {
             return toolError(`Object "${args.objectType}" is a global plugin (${pluginId}) and cannot be placed on layouts.`);
           }
-          // Nonworld-global objects (Arr, Json, Dictionary) go in nonworld-instances, not on layers
-          if (obj.isGlobal === true) {
-            isNonworld = true;
-          }
+          // isGlobal controls persistence; the plugin's kind determines where an instance belongs.
+          const shape = builtinPluginShape(pluginId);
+          isNonworld = shape ? shape.kind === 'nonworld' : obj.isGlobal === true;
         } catch {
           return toolError(`Object type "${args.objectType}" does not exist. Use list_objects to see available objects.`);
         }

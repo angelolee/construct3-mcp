@@ -59,6 +59,7 @@ import {
   createGenericObject,
   createInstanceVariable,
   createBehavior,
+  createAnimationFrame,
 } from '../construct3/templates.js';
 import {
   expectedInstanceBehaviors,
@@ -86,6 +87,7 @@ import {
   type EffectUse,
 } from '../construct3/analyzers/effect-uses.js';
 import { StaleFileError } from '../construct3/disk-state.js';
+import { builtinPluginShape } from '../construct3/builtin-plugin-shapes.js';
 import { withProjectSync } from './project-sync.js';
 
 export function registerObjectTools({ server: mcpServer, reader, writer, idGen }: MutationToolDeps) {
@@ -129,12 +131,13 @@ export function registerObjectTools({ server: mcpServer, reader, writer, idGen }
         const fileRefusal = await writer.entityFileRefusal('objectTypes', args.name, args.subfolder);
         if (fileRefusal) return toolError(fileRefusal);
 
-        const isSingleglobal = GLOBAL_PLUGINS.has(args.pluginId);
-        const isNonworldGlobal = NONWORLD_GLOBAL_PLUGINS.has(args.pluginId);
+        const shape = builtinPluginShape(args.pluginId);
+        const isSingleglobal = shape ? shape.kind === 'singleton' : GLOBAL_PLUGINS.has(args.pluginId);
+        const isNonworldGlobal = shape ? shape.kind === 'nonworld' : NONWORLD_GLOBAL_PLUGINS.has(args.pluginId);
         // A global object's UID before any write too: generateUid refuses while
         // a project file's UIDs are unknown. Registering the addon below only
         // rewrites project.c3proj, which holds no UIDs, so the UID stays free.
-        const uid = isSingleglobal || (args.isGlobal && !isNonworldGlobal)
+        const uid = isSingleglobal || (!shape && args.isGlobal && !isNonworldGlobal)
           ? await idGen.generateUid(reader)
           : undefined;
 
@@ -147,24 +150,19 @@ export function registerObjectTools({ server: mcpServer, reader, writer, idGen }
         if (uid !== undefined) {
           const sgiSid = await idGen.generateSid(reader);
           data = createGlobalObject(args.name, args.pluginId, sid, uid, sgiSid);
-        } else if (args.pluginId === 'Sprite') {
+        } else if (shape?.asset === 'animations' || args.pluginId === 'Sprite') {
           const animSid = await idGen.generateSid(reader);
-          const imageSpriteId = await idGen.generateImageSpriteId(reader);
-
-          // Write placeholder PNG before JSON — abort if image fails
-          await writer.writeImageFiles([{
-            objectName: args.name,
-            animationName: 'Animation 1',
-            frameIndex: 0,
-            pluginId: 'Sprite',
-            width: 1,
-            height: 1,
-          }]);
-
-          data = createSpriteObject(args.name, sid, animSid, imageSpriteId);
+          const frameCount = shape?.fixedFrames ?? 1;
+          const frames = [];
+          for (let i = 0; i < frameCount; i++) frames.push(createAnimationFrame(100, 100, await idGen.generateImageSpriteId(reader)));
+          await writer.writeImageFiles(frames.map((_, frameIndex) => ({ objectName: args.name, animationName: 'Animation 1',
+            frameIndex, pluginId: 'Sprite', width: 100, height: 100 })));
+          data = createSpriteObject(args.name, sid, animSid);
+          data['plugin-id'] = args.pluginId;
+          data.animations!.items[0].frames = frames;
         } else if (args.pluginId === 'Text') {
           data = createTextObject(args.name, sid);
-        } else if (args.pluginId === 'TiledBg') {
+        } else if (shape?.asset === 'image' || args.pluginId === 'TiledBg') {
           const imageSpriteId = await idGen.generateImageSpriteId(reader);
 
           // Write placeholder PNG before JSON — abort if image fails
@@ -173,11 +171,13 @@ export function registerObjectTools({ server: mcpServer, reader, writer, idGen }
             animationName: '',
             frameIndex: 0,
             pluginId: 'TiledBg',
-            width: 1,
-            height: 1,
+            width: 100,
+            height: 100,
           }]);
 
           data = createTiledBgObject(args.name, sid, imageSpriteId);
+          data['plugin-id'] = args.pluginId;
+          if (shape?.tileCollisionPolys) data['tile-collision-polys'] = {};
         } else {
           data = createGenericObject(args.name, args.pluginId, sid);
           // Nonworld-global plugins (Arr, Json, Dictionary) are isGlobal but not singleglobal-inst
@@ -185,6 +185,8 @@ export function registerObjectTools({ server: mcpServer, reader, writer, idGen }
             data.isGlobal = true;
           }
         }
+
+        if (!isSingleglobal) data.isGlobal = isNonworldGlobal || args.isGlobal;
 
         await writer.writeEntityFile('objectTypes', args.name, data, args.subfolder, { createOnly: true });
         await writer.addToProject('objectTypes', args.name, args.subfolder);
