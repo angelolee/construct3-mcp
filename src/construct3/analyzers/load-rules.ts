@@ -15,12 +15,14 @@
 import type { C3Event, Subfolder } from '../types.js';
 import { findNameClash, nameKey } from '../names.js';
 import { isElseCondition, DEFAULT_FUNCTIONS_OBJECT_NAME } from '../event-shapes.js';
+import { BUILTIN_EASE_IDS, type EaseReferenceProblem } from '../ease-references.js';
 
 // ─── Types ───────────────────────────────────────────────────
 
 export type LoadRuleName =
   | 'expression-syntax'
   | 'empty-expression'
+  | 'ease-reference'
   | 'trigger-placement'
   | 'else-placement'
   | 'duplicate-object-name'
@@ -51,6 +53,8 @@ export interface EventCheckOptions {
   aceOrigin: AceOriginResolver;
   /** Undefined means the owner has not been loaded; candidate animation syntax issues then remain warnings. */
   spriteAnimationOwner?: (ace: Record<string, unknown>) => boolean | undefined;
+  tweenEaseOwner?: (ace: Record<string, unknown>) => boolean | undefined;
+  easeReferenceProblem?: EaseReferenceProblem;
 }
 
 // ─── Constants ───────────────────────────────────────────────
@@ -97,6 +101,27 @@ function spriteAnimationParameter(ace: Record<string, unknown>): string | undefi
   if (ace.id === 'add-remove-animation') return 'name';
   if (['is-animation-playing', 'on-animation-finished', 'set-animation', 'add-remove-animation-frame'].includes(String(ace.id))) return 'animation';
   return undefined;
+}
+
+function hasTweenEaseSlot(ace: Record<string, unknown>): boolean {
+  return typeof (ace.behaviorType ?? ace['behavior-type']) === 'string' && [
+    'set-tweens-ease', 'set-all-tweens-ease', 'tween-one-property', 'tween-two-properties', 'tween-three-properties', 'tween-value',
+  ].includes(String(ace.id));
+}
+
+function checkTweenEaseReference(ace: Record<string, unknown>, location: string, keyBase: string, opts: EventCheckOptions, out: LoadRuleIssue[]): void {
+  if (!hasTweenEaseSlot(ace)) return;
+  const owner = opts.tweenEaseOwner?.(ace);
+  if (owner === false) return;
+  const value = isObject(ace.parameters) ? ace.parameters.ease : undefined;
+  if (typeof value === 'string' && BUILTIN_EASE_IDS.has(value)) return;
+  const problem = opts.easeReferenceProblem?.(value);
+  if (opts.easeReferenceProblem && !problem) return;
+  out.push({
+    rule: 'ease-reference', severity: owner === true && problem ? problem.severity : 'warning', location,
+    message: problem?.message ?? `Ease "${String(value)}" requires checking its Tween owner and custom ease registration before Editor saving.`,
+    key: `ease-reference|${keyBase}|ease|${String(value)}`,
+  });
 }
 
 /** Label of a condition or action within its event, e.g. `action 0 "wait" (System)`. */
@@ -507,6 +532,7 @@ export function checkEventLoadRules(events: C3Event[], opts: EventCheckOptions):
       if (!isObject(a)) return;
       const label = describeAce(a, 'action', i);
       checkAceParameters(a, label, `${location} > ${label}`, `${keyBase}|a${aceId(a)}`, out, opts.spriteAnimationOwner?.(a));
+      checkTweenEaseReference(a, `${location} > ${label}`, `${keyBase}|a${aceId(a)}`, opts, out);
     });
 
     // Groups (and other condition-less events) are transparent to the branch.
@@ -519,8 +545,8 @@ export function checkEventLoadRules(events: C3Event[], opts: EventCheckOptions):
   return out;
 }
 
-/** Object classes whose trigger or optional animation-expression checks need owner lookups. */
-export function collectTriggerObjectClasses(events: C3Event[], includeAnimationExpressions = false): Set<string> {
+/** Object classes whose trigger or optional parameter checks need owner lookups. */
+export function collectTriggerObjectClasses(events: C3Event[], includeParameterChecks = false): Set<string> {
   const names = new Set<string>();
   const stack: Array<{ list: unknown; depth: number }> = [{ list: events, depth: 0 }];
   let nodes = 0;
@@ -533,14 +559,14 @@ export function collectTriggerObjectClasses(events: C3Event[], includeAnimationE
       const rec = ev as Record<string, unknown>;
       if (Array.isArray(rec.conditions)) {
         for (const c of rec.conditions as Array<Record<string, unknown>>) {
-          if (c && (isTriggerId(c.id) || (includeAnimationExpressions && spriteAnimationParameter(c))) && typeof c.objectClass === 'string' && c.objectClass !== 'System') {
+          if (c && (isTriggerId(c.id) || (includeParameterChecks && spriteAnimationParameter(c))) && typeof c.objectClass === 'string' && c.objectClass !== 'System') {
             names.add(c.objectClass);
           }
         }
       }
-      if (includeAnimationExpressions && Array.isArray(rec.actions)) {
+      if (includeParameterChecks && Array.isArray(rec.actions)) {
         for (const action of rec.actions as Array<Record<string, unknown>>) {
-          if (action && spriteAnimationParameter(action) && typeof action.objectClass === 'string') names.add(action.objectClass);
+          if (action && (spriteAnimationParameter(action) || hasTweenEaseSlot(action)) && typeof action.objectClass === 'string') names.add(action.objectClass);
         }
       }
       stack.push({ list: rec.children, depth: depth + 1 });
@@ -587,7 +613,7 @@ export function formatLoadRuleIssue(issue: LoadRuleIssue): string {
 /** Error text for a write that a pre-write load-time check blocked. */
 export function loadRuleErrorMessage(errors: string[]): string {
   return 'Construct 3 load-time check failed; nothing was written. ' +
-    'The editor enforces these rules when it opens the project, and breaking them can make the whole project fail to open:\n' +
+    'The editor enforces these rules when it opens or saves the project; invalid data can prevent either operation:\n' +
     errors.map(e => `- ${e}`).join('\n');
 }
 
@@ -605,6 +631,21 @@ function findBehaviorId(owner: Record<string, unknown> | undefined, behaviorName
   if (!owner || !Array.isArray(owner.behaviorTypes)) return undefined;
   const entry = (owner.behaviorTypes as Array<Record<string, unknown>>).find(b => b && b.name === behaviorName);
   return entry && typeof entry.behaviorId === 'string' ? entry.behaviorId : undefined;
+}
+
+function behaviorIdForAce(ace: Record<string, unknown>, data: AceOriginData): string | undefined {
+  const name = ace.behaviorType ?? ace['behavior-type'];
+  if (typeof name !== 'string' || typeof ace.objectClass !== 'string') return undefined;
+  const owner = data.objects.get(ace.objectClass) ?? data.families.get(ace.objectClass);
+  const ownId = findBehaviorId(owner, name);
+  if (ownId) return ownId;
+  for (const family of data.families.values()) {
+    if (Array.isArray(family.members) && family.members.includes(ace.objectClass)) {
+      const id = findBehaviorId(family, name);
+      if (id) return id;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -635,15 +676,7 @@ export function createAceOriginResolver(data: AceOriginData): AceOriginResolver 
     const behaviorName = ace.behaviorType ?? ace['behavior-type'];
     let addonKey: string;
     if (typeof behaviorName === 'string') {
-      let behaviorId = findBehaviorId(owner, behaviorName);
-      if (!behaviorId) {
-        for (const family of data.families.values()) {
-          if (Array.isArray(family.members) && (family.members as unknown[]).includes(objectClass)) {
-            behaviorId = findBehaviorId(family, behaviorName);
-            if (behaviorId) break;
-          }
-        }
-      }
+      const behaviorId = behaviorIdForAce(ace, data);
       if (!behaviorId) return 'unknown';
       addonKey = `behavior:${behaviorId}`;
     } else {
@@ -665,6 +698,18 @@ export function createSpriteAnimationOwnerResolver(data: AceOriginData): NonNull
     const owner = data.objects.get(ace.objectClass) ?? data.families.get(ace.objectClass);
     if (!owner) return undefined;
     if (owner['plugin-id'] !== 'Sprite') return false;
+    const source = origin(ace);
+    return source === 'unknown' ? undefined : source === 'builtin';
+  };
+}
+
+export function createTweenEaseOwnerResolver(data: AceOriginData): NonNullable<EventCheckOptions['tweenEaseOwner']> {
+  const origin = createAceOriginResolver(data);
+  return ace => {
+    if (!hasTweenEaseSlot(ace)) return false;
+    const id = behaviorIdForAce(ace, data);
+    if (!id) return undefined;
+    if (id !== 'Tween') return false;
     const source = origin(ace);
     return source === 'unknown' ? undefined : source === 'builtin';
   };

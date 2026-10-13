@@ -53,12 +53,14 @@ import {
   collectTriggerObjectClasses,
   createAceOriginResolver,
   createSpriteAnimationOwnerResolver,
+  createTweenEaseOwnerResolver,
   formatLoadRuleIssue,
   loadRuleErrorMessage,
   newLoadRuleIssues,
   systemOnlyAceOrigin,
   type EventCheckOptions,
 } from '../construct3/analyzers/load-rules.js';
+import { loadEaseReferenceCheck } from '../construct3/ease-references.js';
 
 // ─── Zod Schemas ────────────────────────────────────────────
 
@@ -1141,7 +1143,10 @@ async function loadAceOriginResolver(
     usedAddons: reader.getUsedAddons(),
     functionsName: functionsObjectName(reader),
   };
-  return { aceOrigin: createAceOriginResolver(data), spriteAnimationOwner: createSpriteAnimationOwnerResolver(data) };
+  return {
+    aceOrigin: createAceOriginResolver(data), spriteAnimationOwner: createSpriteAnimationOwnerResolver(data),
+    tweenEaseOwner: createTweenEaseOwnerResolver(data), easeReferenceProblem: await loadEaseReferenceCheck(reader),
+  };
 }
 
 /**

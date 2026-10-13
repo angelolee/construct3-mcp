@@ -29,12 +29,14 @@ import { everyAnimation, expectedFrameImageName, frameImageBaseName, indexImageF
 import { nameKey } from '../names.js';
 import { builtinPluginShape } from '../builtin-plugin-shapes.js';
 import { duplicateFunctionNames, functionBlockNames } from '../event-variable-names.js';
+import { loadEaseReferenceCheck } from '../ease-references.js';
 import {
   checkEventLoadRules,
   checkFamilyPlugins,
   checkObjectClassNames,
   createAceOriginResolver,
   createSpriteAnimationOwnerResolver,
+  createTweenEaseOwnerResolver,
   classifySidDuplicate,
   describeAce,
   describeEvent,
@@ -149,9 +151,11 @@ export async function validateProjectIntegrity(
   };
   const aceOrigin = createAceOriginResolver(aceData);
   const spriteAnimationOwner = createSpriteAnimationOwnerResolver(aceData);
+  const tweenEaseOwner = createTweenEaseOwnerResolver(aceData);
+  const easeReferenceProblem = await loadEaseReferenceCheck(reader);
   for (const [name, sheet] of eventSheets) {
     if (!Array.isArray(sheet.events)) continue;
-    addLoadRuleIssues(checkEventLoadRules(sheet.events, { sheet: `eventSheets/${name}`, aceOrigin, spriteAnimationOwner }), errors, warnings);
+    addLoadRuleIssues(checkEventLoadRules(sheet.events, { sheet: `eventSheets/${name}`, aceOrigin, spriteAnimationOwner, tweenEaseOwner, easeReferenceProblem }), errors, warnings);
   }
   addLoadRuleIssues(checkObjectClassNames(project), errors, warnings);
   addLoadRuleIssues(checkFamilyPlugins(families, objects as Map<string, Record<string, unknown>>), errors, warnings);
@@ -185,8 +189,8 @@ export async function validateProjectIntegrity(
   // duplicate-object-name, family-plugin-mismatch, file-name-case-mismatch,
   // duplicate-layer-name, missing-behavior-entry, missing-behavior-or-variable,
   // frame-image, hierarchy-link, orphaned-image, duplicate-function-name,
-  // builtin-object-shape, plugin-instance-shape
-  const checksRun = 31;
+  // builtin-object-shape, plugin-instance-shape, ease-reference
+  const checksRun = 32;
 
   return {
     valid: errors.length === 0 && unscannedFiles.length === 0,

@@ -2,6 +2,7 @@ import type { Construct3ProjectReader } from '../construct3/project-reader.js';
 import type { KnowledgeBase } from '../knowledge/base.js';
 import { functionsObjectName, FUNCTIONS_OBJECT_ACTION_IDS } from '../construct3/event-shapes.js';
 import { loadFunctionSignatures, resolveBehaviorType, MAX_ITEMS_PER_BLOCK, MAX_NESTING_DEPTH, MAX_TOTAL_EVENTS } from './event-helpers.js';
+import { loadEaseReferenceCheck, type EaseReferenceProblem } from '../construct3/ease-references.js';
 
 interface ContractBlock {
   eventType?: string;
@@ -20,6 +21,7 @@ export async function validateEventContracts(
   const stack = [{ block, depth: 1 }];
   const contracts = new Map<string, Awaited<ReturnType<KnowledgeBase['query']>>>();
   let functions: Awaited<ReturnType<typeof loadFunctionSignatures>> | undefined;
+  let easeReferenceProblem: EaseReferenceProblem | undefined;
   let count = 0;
   while (stack.length) {
     const current = stack.pop()!;
@@ -101,6 +103,11 @@ export async function validateEventContracts(
             if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 5) throw new Error(`Parameter "${parameter.id}" requires a numeric cmp index from 0 to 5`);
           } else if (parameter.type === 'animation') {
             if (typeof value !== 'string') throw new Error(`Parameter "${parameter.id}" requires a serialized Construct expression string`);
+          } else if (parameter.type === 'ease' && ownerType === 'behavior' && owner === 'Tween' &&
+            reader.getUsedAddons().some(addon => addon.type === 'behavior' && addon.id === 'Tween' && addon.author === 'Scirra')) {
+            easeReferenceProblem ??= await loadEaseReferenceCheck(reader);
+            const problem = easeReferenceProblem(value);
+            if (problem?.severity === 'error') throw new Error(problem.message);
           } else if (['number', 'string', 'any', 'layer', 'groupname', 'template', 'objectname', 'layereffect', 'layouteffect', 'objecteffect',
             'functionname', 'animationframe', 'model3d-string', 'model3d-mesh-string', 'model3d-animation-string', 'tilemapbrush-string',
             'flowchart-string', 'objectinsttags'].includes(parameter.type)) {
