@@ -19,6 +19,79 @@ function parseResult(result: any) {
   return JSON.parse(result.content[0].text);
 }
 
+describe('add_instance_to_layout Editor geometry', () => {
+  function geometryProject(pluginId: string) {
+    return setup({
+      objects: new Map([['Probe', { name: 'Probe', 'plugin-id': pluginId, sid: 1, instanceVariables: [], behaviorTypes: [] }]]),
+      layouts: new Map([['Level', { name: 'Level', sid: 2, layers: [{ name: 'Main', sid: 3, instances: [] }] }]]),
+    });
+  }
+
+  const placement = { layoutName: 'Level', layerName: 'Main', objectType: 'Probe', x: 64, y: 128 };
+  const propertyPlugins = ['DrawingCanvas', 'HTMLElement', 'NinePatch', 'SVGPicture', 'Text', 'TiledBg'];
+
+  it.each([
+    ...['Button', 'List', 'TextBox', 'Tilemap', 'Twitter', 'UserMedia', 'filechooser', 'iframe', 'progressbar', 'qrcode', 'sliderbar', 'video',
+      ...propertyPlugins].map(id => [id, 0, 0]),
+    ['Particles', 0, 0.5], ['shadowlight', 0.5, 0.5],
+  ])('writes the Editor origin for %s', async (id, originX, originY) => {
+    const { server, writer } = geometryProject(id as string);
+    expect(parseResult(await server.callTool('add_instance_to_layout', placement)).success).toBe(true);
+    const layout = writer.callsFor('writeEntityFile')[0].args[2] as any;
+    expect(layout.layers[0].instances[0].world).toMatchObject({ x: 64, y: 128, originX, originY });
+  });
+
+  it.each([
+    ['top-left', 0, 0], ['top', 0.5, 0], ['top-right', 1, 0], ['left', 0, 0.5], ['center', 0.5, 0.5],
+    ['right', 1, 0.5], ['bottom-left', 0, 1], ['bottom', 0.5, 1], ['bottom-right', 1, 1],
+  ])('derives Text world geometry from the %s property', async (origin, originX, originY) => {
+    const { server, writer } = geometryProject('Text');
+    expect(parseResult(await server.callTool('add_instance_to_layout', { ...placement, properties: { origin } })).success).toBe(true);
+    const layout = writer.callsFor('writeEntityFile')[0].args[2] as any;
+    expect(layout.layers[0].instances[0].world).toMatchObject({ originX, originY });
+    expect(layout.layers[0].instances[0].properties.origin).toBe(origin);
+  });
+
+  it.each(propertyPlugins)('uses explicit origin properties for %s', async id => {
+    const { server, writer } = geometryProject(id);
+    expect(parseResult(await server.callTool('add_instance_to_layout', { ...placement, properties: { origin: 'bottom-right' } })).success).toBe(true);
+    const layout = writer.callsFor('writeEntityFile')[0].args[2] as any;
+    expect(layout.layers[0].instances[0].world).toMatchObject({ originX: 1, originY: 1 });
+  });
+
+  it('writes the fixed ShadowLight size instead of the generic size', async () => {
+    const { server, writer } = geometryProject('shadowlight');
+    expect(parseResult(await server.callTool('add_instance_to_layout', placement)).success).toBe(true);
+    const layout = writer.callsFor('writeEntityFile')[0].args[2] as any;
+    expect(layout.layers[0].instances[0].world).toMatchObject({ width: 50, height: 50 });
+  });
+
+  it.each([
+    ['Text', { properties: { origin: 'invalid' } }],
+    ['Text', { properties: { origin: null } }],
+    ['Text', { properties: { origin: 'bottom-right' }, originX: 0 }],
+    ['Button', { originY: 0.5 }],
+    ['Tilemap', { originX: 1 }],
+    ['Particles', { originX: 0.5 }],
+    ['shadowlight', { width: 64 }],
+    ['shadowlight', { height: 64 }],
+  ])('refuses %s geometry that the Editor would replace', async (id, overrides) => {
+    const { server, writer } = geometryProject(id as string);
+    const result = await server.callTool('add_instance_to_layout', { ...placement, ...overrides as object });
+    expect(result.isError).toBe(true);
+    expect(writer.callsFor('writeEntityFile')).toHaveLength(0);
+  });
+
+  it.each(['Sprite', 'ThirdParty'])('keeps custom origins and dimensions for %s', async id => {
+    const { server, writer } = geometryProject(id);
+    expect(parseResult(await server.callTool('add_instance_to_layout', {
+      ...placement, originX: 0.25, originY: 0.75, width: 123, height: 45,
+    })).success).toBe(true);
+    const layout = writer.callsFor('writeEntityFile')[0].args[2] as any;
+    expect(layout.layers[0].instances[0].world).toMatchObject({ originX: 0.25, originY: 0.75, width: 123, height: 45 });
+  });
+});
+
 describe('create_layout', () => {
   it('registers the tool', () => {
     const { server } = setup();

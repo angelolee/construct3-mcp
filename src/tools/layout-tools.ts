@@ -59,7 +59,7 @@ import {
 } from '../construct3/layer-references.js';
 import { EntityWriteError, filesLeftClause } from '../construct3/project-writer.js';
 import { StaleFileError } from '../construct3/disk-state.js';
-import { builtinPluginShape } from '../construct3/builtin-plugin-shapes.js';
+import { builtinPluginShape, ORIGIN_COORDINATES } from '../construct3/builtin-plugin-shapes.js';
 import { withProjectSync } from './project-sync.js';
 
 /**
@@ -391,8 +391,8 @@ export function registerLayoutTools({ server: mcpServer, reader, writer, idGen }
       objectType: z.string().max(200).describe('Object type name to place'),
       x: z.number().describe('X position'),
       y: z.number().describe('Y position'),
-      width: z.number().optional().default(100).describe('Instance width'),
-      height: z.number().optional().default(100).describe('Instance height'),
+      width: z.number().optional().describe('Instance width (default: 100; ShadowLight requires 50)'),
+      height: z.number().optional().describe('Instance height (default: 100; ShadowLight requires 50)'),
       properties: boundedRecord()
         .refine(obj => JSON.stringify(obj).length <= 50_000, 'Properties payload too large (max 50KB)')
         .optional()
@@ -401,8 +401,8 @@ export function registerLayoutTools({ server: mcpServer, reader, writer, idGen }
       angle: z.number().optional().describe('Rotation angle in radians (default: 0)'),
       color: z.array(z.number().min(0).max(1)).length(4).optional().describe('RGBA tint as [r, g, b, a] with values 0-1 (default: [1,1,1,1])'),
       zElevation: z.number().optional().describe('Z elevation for 3D layering (default: 0)'),
-      originX: z.number().min(0).max(1).optional().describe('Horizontal origin 0-1 (default: 0.5 = center)'),
-      originY: z.number().min(0).max(1).optional().describe('Vertical origin 0-1 (default: 0.5 = center)'),
+      originX: z.number().min(0).max(1).optional().describe('Horizontal origin 0-1. Known plugin initialization controls the default; conflicting values are refused. For property-based origins, set properties.origin.'),
+      originY: z.number().min(0).max(1).optional().describe('Vertical origin 0-1. Known plugin initialization controls the default; conflicting values are refused. For property-based origins, set properties.origin.'),
       instanceVariables: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional()
         .describe('Instance variable values as {varName: value}; every instance variable of the object and its families not given gets its default (0, "" or false); a name the object and its families have no variable of is refused'),
       behaviors: z.record(z.string(), boundedRecord())
@@ -503,13 +503,35 @@ export function registerLayoutTools({ server: mcpServer, reader, writer, idGen }
           if (!Array.isArray(targetLayer.instances)) targetLayer.instances = [];
 
           const pluginProps = { ...(pluginId ? DEFAULT_INSTANCE_PROPERTIES[pluginId] : {}), ...args.properties };
+          const shape = pluginId ? builtinPluginShape(pluginId) : undefined;
+          let origin = shape?.worldOrigin;
+          if (origin === 'property') {
+            const name = pluginProps.origin === undefined ? 'top-left' : pluginProps.origin;
+            if (typeof name !== 'string' || !Object.hasOwn(ORIGIN_COORDINATES, name)) {
+              return toolError(`Plugin "${pluginId}" requires a valid properties.origin (${Object.keys(ORIGIN_COORDINATES).join(', ')}). Nothing was changed.`);
+            }
+            pluginProps.origin = name;
+            origin = ORIGIN_COORDINATES[name];
+          }
+          if (origin) {
+            if ((args.originX !== undefined && args.originX !== origin[0]) || (args.originY !== undefined && args.originY !== origin[1])) {
+              return toolError(`Plugin "${pluginId}" initializes origin to (${origin[0]}, ${origin[1]}). Use a matching origin${shape?.worldOrigin === 'property' ? ' or set properties.origin' : ''}. Nothing was changed.`);
+            }
+            overrides.originX = origin[0];
+            overrides.originY = origin[1];
+          }
+          const width = args.width ?? shape?.fixedSize?.[0] ?? 100;
+          const height = args.height ?? shape?.fixedSize?.[1] ?? 100;
+          if (shape?.fixedSize && (width !== shape.fixedSize[0] || height !== shape.fixedSize[1])) {
+            return toolError(`Plugin "${pluginId}" initializes size to ${shape.fixedSize[0]}×${shape.fixedSize[1]}. Conflicting dimensions were refused. Nothing was changed.`);
+          }
 
           if (!args.properties && pluginId && !DEFAULT_INSTANCE_PROPERTIES[pluginId]) {
-            warnings.push(`No default instance properties known for plugin "${pluginId}". Instance created with empty properties — you may need to configure them in the C3 editor.`);
+            warnings.push(`No complete default instance properties known for plugin "${pluginId}". Instance created with partial or empty properties — you may need to configure them in the C3 editor.`);
           }
 
           const instance = createInstance(
-            args.objectType, uid, sid, args.x, args.y, args.width, args.height,
+            args.objectType, uid, sid, args.x, args.y, width, height,
             pluginProps,
             overrides,
           );
@@ -521,8 +543,8 @@ export function registerLayoutTools({ server: mcpServer, reader, writer, idGen }
                 typeof tileHeight !== 'number' || !Number.isSafeInteger(tileHeight) || tileHeight <= 0) {
               return toolError('Tilemap tile-width and tile-height must be positive integers. Nothing was changed.');
             }
-            const columns = Math.max(1, Math.floor(args.width / tileWidth));
-            const rows = Math.max(1, Math.floor(args.height / tileHeight));
+            const columns = Math.max(1, Math.floor(width / tileWidth));
+            const rows = Math.max(1, Math.floor(height / tileHeight));
             const cells = columns * rows;
             if (!Number.isSafeInteger(cells) || columns > 0xffffffff || rows > 0xffffffff) {
               return toolError('Tilemap dimensions exceed the supported integer range. Nothing was changed.');
