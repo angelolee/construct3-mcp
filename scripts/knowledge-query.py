@@ -11,9 +11,22 @@ def source(db, identity):
     row = db.execute("SELECT url,sha256,license FROM sources WHERE id=?", (identity,)).fetchone()
     if not row:
         return {"id": identity, "coverage": "Source provenance is unavailable"}
-    match = re.search(r"/r(\d+)-(\d+)/", row["url"] or "")
+    match = re.search(r"/r(\d+)(?:-(\d+))?/", row["url"] or "")
     return {"id": identity, "url": row["url"], "hash": row["sha256"], "license": row["license"],
-            "release": f"r{match[1]}.{match[2]}" if match else "unknown"}
+            "release": (f"r{match[1]}" + (f".{match[2]}" if match[2] else "")) if match else "unknown"}
+
+
+def contract_source(db, owner_type):
+    if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ace_sources'").fetchone():
+        row = db.execute("SELECT source_id FROM ace_sources WHERE owner_type=?", (owner_type,)).fetchone()
+        if not row:
+            raise ValueError(f"Contract source mapping unavailable for {owner_type}")
+        result = source(db, row[0])
+        if not result.get('url') or not result.get('hash'):
+            raise ValueError(f"Contract source provenance unavailable for {owner_type}")
+        return result
+    return source(db, {"plugin": "plugins-allAces-r495-2", "behavior": "behaviors-allAces-r495-2",
+                       "common": "common-aces-r495-2"}[owner_type])
 
 
 def contract(db, request):
@@ -25,18 +38,16 @@ def contract(db, request):
     assert kind in ("actions", "conditions", "expressions")
     row = db.execute("SELECT definition FROM aces WHERE owner_type=? AND owner=? AND kind=? AND id=?",
                      (owner_type, owner, kind, identity)).fetchone()
-    # shortcut: one release per owner type; add per-row source IDs before mixing snapshots.
-    source_id = {"plugin": "plugins-allAces-r495-2", "behavior": "behaviors-allAces-r495-2", "common": "common-aces-r495-2"}[owner_type]
     if row:
         return {"status": "verified", "definition": json.loads(row[0]), "evidence": "public-editor-contract",
-                "source": source(db, source_id), "applicability": "Unassigned" if owner_type == "common" else "Direct owner contract"}
+                "source": contract_source(db, owner_type), "applicability": "Unassigned" if owner_type == "common" else "Direct owner contract"}
     known = bool(db.execute("SELECT 1 FROM aces WHERE owner_type=? AND owner=? LIMIT 1", (owner_type, owner)).fetchone())
     if owner_type == "plugin":
         common = db.execute("SELECT definition FROM aces WHERE owner_type='common' AND owner='builtin' AND kind=? AND id=?", (kind, identity)).fetchone()
         observed = db.execute("SELECT 1 FROM observed_aces WHERE owner_type='plugin' AND lower(owner)=lower(?) AND kind=? AND id=?", (owner, kind, identity)).fetchone()
         if common and observed:
             return {"status": "verified", "definition": json.loads(common[0]), "evidence": "common-contract-with-observed-owner",
-                    "source": source(db, "common-aces-r495-2"), "coverage": "Owner applicability observed in an original project; not universal plugin coverage"}
+                    "source": contract_source(db, "common"), "coverage": "Owner applicability observed in an original project; not universal plugin coverage"}
         return {"status": "unverified", "knownOwner": known, "reason": "No verified direct contract or observed common applicability; investigate the knowledge gap before writing."}
     return {"status": "not-found" if known else "unverified", "knownOwner": known,
             "reason": "ACE absent from the known owner contract" if known else "Owner contract is unavailable"}
@@ -53,7 +64,7 @@ def query(db, request):
     if not isinstance(text, str) or len(text) > 250:
         raise ValueError("Query must be a string of at most 250 characters")
     if operation == "search_docs":
-        rows = db.execute("""SELECT p.id,p.source,p.page,p.title,p.url,substr(p.text,1,1800) AS text
+        rows = db.execute("""SELECT p.id,p.source,p.page,p.title,p.url,substr(snippet(page_search,2,'','',' … ',64),1,1800) AS text
             FROM page_search JOIN pages p ON p.id=page_search.id
             WHERE page_search MATCH ? ORDER BY bm25(page_search) LIMIT ?""", (text, limit)).fetchall()
         results = []

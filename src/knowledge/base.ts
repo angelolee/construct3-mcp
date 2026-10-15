@@ -7,7 +7,7 @@ const parameterTypes = ['number', 'string', 'any', 'boolean', 'combo', 'combo-gr
   'instancevar', 'instancevarbool', 'objinstancevar', 'eventvar', 'eventvarbool', 'eventvarany', 'groupname', 'template',
   'objectname', 'layereffect', 'layouteffect', 'objecteffect', 'function', 'functionname', 'variadic', 'keyb', 'projectfile',
   'audiofile', 'animation', 'animationframe', 'timeline', 'ease', 'model3d', 'model3d-string', 'model3d-mesh-string',
-  'model3d-animation-string', 'tilemapbrush', 'tilemapbrush-string', 'flowchart', 'flowchart-string', 'objectinsttags'] as const;
+  'model3d-animation-string', 'model3d-node-string', 'tilemapbrush', 'tilemapbrush-string', 'flowchart', 'flowchart-string', 'objectinsttags'] as const;
 const definitionSchema = z.object({
   id: z.string(),
   params: z.array(z.object({ id: z.string(), type: z.enum(parameterTypes), items: z.array(z.string()).optional(),

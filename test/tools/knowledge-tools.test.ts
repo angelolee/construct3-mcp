@@ -62,6 +62,20 @@ describe('Construct knowledge tools', () => {
     expect(data.results[0].text.length).toBeLessThanOrEqual(1800);
   });
 
+  it('includes a manual match beyond the first 1800 characters in its bounded passage', async () => {
+    execFileSync('python3', ['-c', `
+import sqlite3,sys
+c=sqlite3.connect(sys.argv[1])
+text=('Unrelated introduction. '*200)+'Save LLM context file creates llm-context.md with the project.'
+c.execute('UPDATE pages SET text=?',(text,))
+c.execute('UPDATE page_search SET text=?',(text,))
+c.commit()
+`, join(root, 'knowledge.sqlite')]);
+    const data = await knowledge.query({ operation: 'search_docs', query: '"llm-context"', limit: 1 });
+    expect(data.results[0].text).toContain('llm-context.md');
+    expect(data.results[0].text.length).toBeLessThanOrEqual(1800);
+  });
+
   it('filters examples by mechanic and addon without returning entire inventories', async () => {
     const result = await server.callTool('search_construct_examples', { query: 'platformer', addonId: 'Platform' });
     const data = JSON.parse(result.content[0].text);
@@ -80,6 +94,40 @@ describe('Construct knowledge tools', () => {
     expect(data.status).toBe('verified');
     expect(data.definition.params[0].id).toBe('max-speed');
     expect(data.source.release).toBe('r495.2');
+  });
+
+  it('uses explicit index provenance for direct and observed common r506 contracts', async () => {
+    execFileSync('python3', ['-c', `
+import sqlite3,sys
+c=sqlite3.connect(sys.argv[1])
+c.execute('CREATE TABLE ace_sources(owner_type TEXT PRIMARY KEY,source_id TEXT NOT NULL)')
+for kind,name in [('plugin','plugins-allAces'),('behavior','behaviors-allAces'),('common','common-aces')]:
+ identity=name+'-r506'
+ c.execute('INSERT INTO sources VALUES(?,?,?,?)',(identity,'https://example.test/r506/'+name,'new-hash','test-only'))
+ c.execute('INSERT INTO ace_sources VALUES(?,?)',(kind,identity))
+c.execute('INSERT INTO aces VALUES(?,?,?,?,?,?)',('plugin','Model3D','actions','set-node','test','{"id":"set-node","params":[{"id":"node","type":"model3d-node-string"}]}'))
+c.commit()
+`, join(root, 'knowledge.sqlite')]);
+    for (const ref of [
+      { ownerType: 'behavior', owner: 'Platform', kind: 'actions', id: 'set-max-speed' },
+      { ownerType: 'plugin', owner: 'Sprite', kind: 'actions', id: 'set-position' },
+      { ownerType: 'plugin', owner: 'Model3D', kind: 'actions', id: 'set-node' },
+    ]) {
+      const data = await knowledge.query({ operation: 'get_ace_contract', ...ref });
+      expect(data.status).toBe('verified');
+      expect(data.source).toMatchObject({ release: 'r506', hash: 'new-hash' });
+    }
+  });
+
+  it('fails closed if an explicit index source map is incomplete', async () => {
+    execFileSync('python3', ['-c', `
+import sqlite3,sys
+c=sqlite3.connect(sys.argv[1])
+c.execute('CREATE TABLE ace_sources(owner_type TEXT PRIMARY KEY,source_id TEXT NOT NULL)')
+c.commit()
+`, join(root, 'knowledge.sqlite')]);
+    await expect(knowledge.query({ operation: 'get_ace_contract', ownerType: 'plugin', owner: 'Text', kind: 'actions', id: 'set-text' }))
+      .rejects.toThrow('source');
   });
 
   it('distinguishes observed common applicability from a direct contract', async () => {
