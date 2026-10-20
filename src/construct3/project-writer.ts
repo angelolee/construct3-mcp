@@ -197,6 +197,7 @@ export class Construct3ProjectWriter {
   // since it was read and the write that follows run as one step, so of two
   // parallel calls writing the same file the second sees the first's write
   private readonly fileLocks = new Map<string, ReturnType<typeof createLock>>();
+  private readonly createdEntityPaths = new Map<string, string>();
   private readonly animationLock = createLock();
 
   constructor(
@@ -614,7 +615,9 @@ export class Construct3ProjectWriter {
    * before their first write and return the text as a tool error.
    */
   async entityFileRefusal(category: EntityCategory, name: string, subfolder?: string): Promise<string | undefined> {
-    const existing = await findFileIgnoringCase(await this.entityFilePath(category, name, subfolder));
+    const created = this.createdEntityPaths.get(`${category}/${name.toLowerCase()}`);
+    const existing = (created ? await findFileIgnoringCase(created) : undefined)
+      ?? await findFileIgnoringCase(await this.entityFilePath(category, name, subfolder));
     if (!existing) return undefined;
     const label = relative(this.reader.getProjectDir(), existing).split(sep).join('/');
     return `Refusing to create "${name}": the file ${label} already exists (not registered in project.c3proj under this name, ` +
@@ -641,13 +644,17 @@ export class Construct3ProjectWriter {
     };
     if (options.createOnly) await refuseExisting();
 
-    const requested = await this.entityFilePath(category, name, subfolder);
+    // New entities must match the manifest; legacy path resolution is only for existing files.
+    const requested = options.createOnly
+      ? resolveProjectPath(this.reader.getProjectDir(), category, subfolder ?? '', `${name}.json`)
+      : await this.entityFilePath(category, name, subfolder);
 
     // Ensure directory exists
     await mkdir(dirname(requested), { recursive: true });
     const filePath = await existingSpelling(requested);
     try {
-      return await this.withFileLock(filePath, async () => {
+      const lockPath = options.createOnly ? resolveProjectPath(this.reader.getProjectDir(), category, `${name}.json`) : filePath;
+      return await this.withFileLock(lockPath, async () => {
         if (options.createOnly) {
           // Again under the file's lock: of two parallel calls creating the
           // same entity, the second sees the first one's file and is refused
@@ -674,6 +681,7 @@ export class Construct3ProjectWriter {
         }
 
         this.afterOwnWrite(filePath, state, text);
+        if (options.createOnly) this.createdEntityPaths.set(`${category}/${name.toLowerCase()}`, filePath);
         this.noteCallChange(filePath);
         return backupPath;
       });

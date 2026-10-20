@@ -340,8 +340,8 @@ describe('a write never replaces a change made on disk after the call read the f
     const result = await call('delete_event_sheet', { name: 'Other' });
 
     expect(result.isError).toBe(true);
-    expect(result.text).toContain('eventSheets/other.json was changed on disk after this server read it');
-    expect((await readJson('eventSheets/other.json')).events).toEqual([{ eventType: 'comment', text: 'saved in the editor' }]);
+    expect(result.text).toContain('eventSheets/Other.json was changed on disk after this server read it');
+    expect((await readJson('eventSheets/Other.json')).events).toEqual([{ eventType: 'comment', text: 'saved in the editor' }]);
     expect((await readJson('project.c3proj')).eventSheets.items).toContain('Other');
   });
 
@@ -368,9 +368,9 @@ describe('a write never replaces a change made on disk after the call read the f
     const results = [sprite, text];
     expect(results.filter(r => r.isError)).toHaveLength(1);
     const refused = results.find(r => r.isError)!;
-    expect(refused.text).toContain('Refusing to create "Enemy": the file objectTypes/enemy.json already exists');
+    expect(refused.text).toContain('Refusing to create "Enemy": the file objectTypes/Enemy.json already exists');
     const winner = sprite.isError ? 'Text' : 'Sprite';
-    expect((await readJson('objectTypes/enemy.json'))['plugin-id']).toBe(winner);
+    expect((await readJson('objectTypes/Enemy.json'))['plugin-id']).toBe(winner);
     expect((await readJson('project.c3proj')).objectTypes.items.filter((n: string) => n === 'Enemy')).toHaveLength(1);
   });
 
@@ -415,7 +415,7 @@ describe('the writer\'s own updates of project.c3proj merge a change made on dis
     const project = await readJson('project.c3proj');
     expect(project.properties.author).toBe('Editor');
     expect(project.eventSheets.items).toContain('Other');
-    expect(existsSync(join(dir, 'eventSheets', 'other.json'))).toBe(true);
+    expect(existsSync(join(dir, 'eventSheets', 'Other.json'))).toBe(true);
     expect((await expectSuccess('validate_project')).data.valid).toBe(true);
   });
 
@@ -433,7 +433,7 @@ describe('the writer\'s own updates of project.c3proj merge a change made on dis
     const project = await readJson('project.c3proj');
     expect(project.properties.author).toBe('Editor');
     expect(project.eventSheets.items).not.toContain('Other');
-    expect(existsSync(join(dir, 'eventSheets', 'other.json'))).toBe(false);
+    expect(existsSync(join(dir, 'eventSheets', 'Other.json'))).toBe(false);
     expect((await expectSuccess('validate_project')).data.valid).toBe(true);
   });
 
@@ -470,7 +470,7 @@ describe('a call refused after it changed other files puts them back (#51)', () 
 
   it('move_events_between_sheets: the target sheet is put back when the source was saved in the editor', async () => {
     await expectSuccess('create_event_sheet', { name: 'Other' });
-    const targetBefore = await readFile(join(dir, 'eventSheets', 'other.json'), 'utf-8');
+    const targetBefore = await readFile(join(dir, 'eventSheets', 'Other.json'), 'utf-8');
     // The editor saves the source sheet right after the tool wrote the target
     const writeEntityFile = writer.writeEntityFile.bind(writer);
     vi.spyOn(writer, 'writeEntityFile').mockImplementation(async (category, name, ...rest) => {
@@ -483,8 +483,8 @@ describe('a call refused after it changed other files puts them back (#51)', () 
 
     expect(result.isError).toBe(true);
     expect(result.text).toContain('eventSheets/MainSheet.json was changed on disk after this server read it');
-    expect(result.text).toContain('were put back as they were before the call (eventSheets/other.json), so the call changed nothing');
-    expect(await readFile(join(dir, 'eventSheets', 'other.json'), 'utf-8')).toBe(targetBefore);
+    expect(result.text).toContain('were put back as they were before the call (eventSheets/Other.json), so the call changed nothing');
+    expect(await readFile(join(dir, 'eventSheets', 'Other.json'), 'utf-8')).toBe(targetBefore);
     const source = await readJson('eventSheets/MainSheet.json');
     expect(source.events.some((e: { text?: string }) => e.text === 'saved in the editor')).toBe(true);
     expect(await eventCount('MainSheet', 400000000000003)).toBe(1);
@@ -540,8 +540,8 @@ describe('a call refused after it changed other files puts them back (#51)', () 
       return writer.writeEntityFile('eventSheets', 'MainSheet', { ...sheet, events: [] }).then(() => undefined, (e: Error) => e);
     });
 
-    expect(error?.message).toContain('put back as they were before the call (project.c3proj, eventSheets/new.json (deleted: the call had created it))');
-    expect(existsSync(join(dir, 'eventSheets', 'new.json'))).toBe(false);
+    expect(error?.message).toContain('put back as they were before the call (project.c3proj, eventSheets/New.json (deleted: the call had created it))');
+    expect(existsSync(join(dir, 'eventSheets', 'New.json'))).toBe(false);
     expect((await readJson('project.c3proj')).eventSheets.items).toEqual(['MainSheet']);
     expect(reader.getProject().eventSheets.items).toEqual(['MainSheet']);
     expect((await readJson('eventSheets/MainSheet.json')).events).toHaveLength(2);
@@ -564,9 +564,9 @@ describe('a call refused after it changed other files puts them back (#51)', () 
 
     expect(result.isError).toBe(true);
     expect(result.text).toContain('left as they are (changed on disk again after this call wrote them, or their backup was replaced): '
-      + 'eventSheets/other.json (its state from before the call is in eventSheets/other.json.bak)');
+      + 'eventSheets/Other.json (its state from before the call is in eventSheets/Other.json.bak)');
     expect(result.text).toContain('Check the project (validate_project, git diff)');
-    const target = await readJson('eventSheets/other.json');
+    const target = await readJson('eventSheets/Other.json');
     expect(target.events.some((e: { text?: string }) => e.text === 'target saved in the editor')).toBe(true);
   });
 });

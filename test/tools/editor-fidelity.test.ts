@@ -98,14 +98,14 @@ describe('image file names', () => {
 
     expect(await imagesOf('sprite2-')).toEqual(before);
     expect(Buffer.compare(await readFile(join(tmpDir, 'images', 'sprite2-walk-000.png')), art)).toBe(0);
-    const obj = JSON.parse(await readFile(join(tmpDir, 'objectTypes', 'sprite2.json'), 'utf8'));
+    const obj = JSON.parse(await readFile(join(tmpDir, 'objectTypes', 'Sprite2.json'), 'utf8'));
     expect(obj.animations.items.map((a: { name: string }) => a.name)).toEqual(['Animation 1', 'Walk']);
   });
 
   it('replace_sprite_image switches a JPEG frame to PNG so the editor loads the new file', async () => {
     await call('create_object', { name: 'Sprite2', pluginId: 'Sprite' });
     // A frame the editor saved as JPEG: fileType image/jpeg, image in "<name>.jpg"
-    const objPath = join(tmpDir, 'objectTypes', 'sprite2.json');
+    const objPath = join(tmpDir, 'objectTypes', 'Sprite2.json');
     const obj = JSON.parse(await readFile(objPath, 'utf8'));
     obj.animations.items[0].frames[0].fileType = 'image/jpeg';
     await writeFile(objPath, JSON.stringify(obj, null, '\t'));
@@ -132,7 +132,7 @@ describe('image file names', () => {
       objectName: 'Sprite2', animationName: 'Animation 1', frameIndex: 0,
       pngBase64: generatePlaceholderPng(2, 2).toString('base64'),
     });
-    const written = JSON.parse(await readFile(join(tmpDir, 'objectTypes', 'sprite2.json'), 'utf8'));
+    const written = JSON.parse(await readFile(join(tmpDir, 'objectTypes', 'Sprite2.json'), 'utf8'));
     expect(written.animations.items[0].frames[0].fileType).toBe('image/png');
     expect(data.warnings).toHaveLength(1);
     expect(data.warnings[0]).toContain('Image written to');
@@ -304,7 +304,7 @@ describe('instance behavior entries', () => {
 });
 
 describe('rename_animation', () => {
-  const objectPath = () => join(tmpDir, 'objectTypes', 'sprite2.json');
+  const objectPath = () => join(tmpDir, 'objectTypes', 'Sprite2.json');
   const layoutPath = () => join(tmpDir, 'layouts', 'Layout 1.json');
 
   /** Sprite2 with animations "Animation 1" and "Walk" (3 frames, frame 1 with its own image), one instance starting with "Walk". */
@@ -445,7 +445,7 @@ describe('rename_animation', () => {
     // Windows and macOS find the file under the other spelling; case-sensitive file systems do not
     expect(result.content[0].text).toMatch(/Object "sprite2" is named "Sprite2" in the project|Object "sprite2" not found/);
     expect(await imagesOf('sprite2-')).toEqual(imagesBefore);
-    expect(await readdir(join(tmpDir, 'objectTypes'))).toContain('sprite2.json');
+    expect(await readdir(join(tmpDir, 'objectTypes'))).toContain('Sprite2.json');
     expect(Buffer.compare(await readFile(objectPath()), objectBefore)).toBe(0);
     expect(Buffer.compare(await readFile(layoutPath()), layoutBefore)).toBe(0);
     expect(await initialAnimations()).toEqual(['Walk']);

@@ -59,7 +59,7 @@ import {
 } from '../construct3/layer-references.js';
 import { EntityWriteError, filesLeftClause } from '../construct3/project-writer.js';
 import { StaleFileError } from '../construct3/disk-state.js';
-import { builtinPluginShape, ORIGIN_COORDINATES } from '../construct3/builtin-plugin-shapes.js';
+import { builtinPluginShape, builtinPropertyErrors, ORIGIN_COORDINATES } from '../construct3/builtin-plugin-shapes.js';
 import { withProjectSync } from './project-sync.js';
 
 /**
@@ -435,6 +435,9 @@ export function registerLayoutTools({ server: mcpServer, reader, writer, idGen }
         } catch {
           return toolError(`Object type "${args.objectType}" does not exist. Use list_objects to see available objects.`);
         }
+
+        const propertyErrors = builtinPropertyErrors(pluginId ?? '', args.properties ?? {});
+        if (propertyErrors.length) return toolError(propertyErrors.join('\n'));
 
         let layout: Layout;
         try {

@@ -8,6 +8,7 @@ import { readdir } from 'fs/promises';
 import { join } from 'path';
 import {
   entityFolderPaths,
+  entityFilePath,
   type Construct3ProjectReader,
   type EntityCategory,
   type ReadFailure,
@@ -27,7 +28,7 @@ import { namedAfterAnyObject } from '../object-images.js';
 import type { BehaviorLookupData } from './behavior-refs.js';
 import { everyAnimation, expectedFrameImageName, frameImageBaseName, indexImageFiles } from '../animation-rename.js';
 import { nameKey } from '../names.js';
-import { builtinPluginShape } from '../builtin-plugin-shapes.js';
+import { builtinPluginShape, builtinPropertyErrors } from '../builtin-plugin-shapes.js';
 import { duplicateFunctionNames, functionBlockNames } from '../event-variable-names.js';
 import { loadEaseReferenceCheck } from '../ease-references.js';
 import {
@@ -242,6 +243,10 @@ function checkBuiltinInstanceShapes(layouts: Map<string, Layout>, objects: Map<s
   const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
   for (const [name, layout] of layouts) {
     forEachLayoutInstance(layout, instance => {
+      for (const message of builtinPropertyErrors(objects.get(instance.type)?.['plugin-id'] ?? '', instance.properties ?? {})) {
+        errors.push({ check: 'plugin-instance-property', entity: `layouts/${name}`, message: `${instance.type} (UID ${instance.uid}): ${message}`,
+          suggestion: 'Use a release-specific supported property value from the Editor.' });
+      }
       if (objects.get(instance.type)?.['plugin-id'] !== 'Tilemap') return;
       const ownData = instance.ownData;
       const data = record(ownData) ? ownData.tilemapData : undefined;
@@ -1498,14 +1503,22 @@ async function checkOrphanedFiles(
     ['objectTypes', project.objectTypes],
     ['eventSheets', project.eventSheets],
     ['layouts', project.layouts],
+    ['families', project.families],
   ];
 
   for (const [dirName, container] of categories) {
     const expected = new Map<string, string>();
-    for (const name of entityFolderPaths(container).keys()) {
-      expected.set(name, reader.getEntityRelativePath(dirName as 'objectTypes' | 'eventSheets' | 'layouts', name));
-    }
     const files = await listEntityFiles(join(projectDir, dirName), dirName, 0);
+    for (const [name, folder] of entityFolderPaths(container)) {
+      const actual = reader.getEntityRelativePath(dirName as EntityCategory, name);
+      expected.set(name, actual);
+      const canonical = entityFilePath(dirName, folder, name);
+      if (actual !== canonical && files.some(file => file.path === actual)) {
+        warnings.push({ check: 'editor-file-path', entity: actual,
+          message: `Reader compatibility resolves "${name}" at ${actual}; the registered Editor path is ${canonical}.`,
+          suggestion: 'pack_project writes the canonical archive path without renaming legacy source files. Verify folder projects by actual Editor open/save/read.' });
+      }
+    }
     classifyEntityFiles(dirName, files, expected, warnings, info);
   }
 }

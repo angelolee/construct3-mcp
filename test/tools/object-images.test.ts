@@ -195,7 +195,7 @@ describe('delete_object refused because a file changed on disk during the call',
     const result = await server.callTool('delete_object', { name: 'Coin' });
     expect(result.isError).toBe(true);
     const text = result.content[0].text;
-    expect(text).toContain('objectTypes/coin.json was changed on disk after this server read it');
+    expect(text).toContain('objectTypes/Coin.json was changed on disk after this server read it');
     expect(text).toContain('it reads the file as it is now. Its image files were renamed back from .bak.');
     expect(text).not.toContain('The object file was restored');
     expect(await readFile(objectPath('Coin'), 'utf8')).toBe(saved);
@@ -231,7 +231,7 @@ describe('delete_object refused because a file changed on disk during the call',
     const text = result.content[0].text;
     expect(text).toContain('project.c3proj was changed on disk after this server read it');
     expect(text).toContain('left as they are (changed on disk again after this call wrote them, or their backup was replaced): ' +
-      'objectTypes/coin.json (its state from before the call is in objectTypes/coin.json.bak)');
+      'objectTypes/Coin.json (its state from before the call is in objectTypes/Coin.json.bak)');
     expect(text).toContain('before you run the tool again. Its image files were renamed back from .bak.');
     expect(text).not.toContain('The object file was restored');
     expect(await readFile(objectPath('Coin'), 'utf8')).toBe(saved);
@@ -265,7 +265,7 @@ describe('delete_object whose project.c3proj update fails otherwise', () => {
     const text = result.content[0].text;
     expect(text).toContain('project.c3proj changed on disk and could not be read again');
     expect(text).toContain('Left as they are (changed on disk again after this call wrote them, or their backup was replaced): ' +
-      'objectTypes/coin.json (its state from before the call is in objectTypes/coin.json.bak). ' +
+      'objectTypes/Coin.json (its state from before the call is in objectTypes/Coin.json.bak). ' +
       'Check the project (validate_project, git diff) before you run the tool again. Its image files were renamed back from .bak.');
     expect(text).not.toContain('The object file was restored');
     expect(await readFile(objectPath('Coin'), 'utf8')).toBe(saved);

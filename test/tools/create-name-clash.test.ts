@@ -128,7 +128,7 @@ describe('create tools refuse names that differ only in case', () => {
   it('still creates new names', async () => {
     await expectCreated('create_event_sheet', { name: 'Sheet3' });
     await expectCreated('create_layout', { name: 'Layout 2' });
-    expect((await readdir(join(dir, 'layouts'))).sort()).toEqual(['Layout 1.json', 'layout 2.json']);
+    expect((await readdir(join(dir, 'layouts'))).sort()).toEqual(['Layout 1.json', 'Layout 2.json']);
     expect((await c3proj()).eventSheets.items).toEqual(['MainSheet', 'Sheet3']);
   });
 });

@@ -442,7 +442,7 @@ export function registerEventTools({ server: mcpServer, reader, writer, idGen, k
   server.registerTool(
     'add_event_block',
     {
-      description: 'Set dryRun true to validate without writing. Add a block event (conditions + actions) to an event sheet — the core of gameplay logic. Written in the shapes the Construct 3 editor saves: sub-events (blocks, also without conditions, which run whenever their parent runs; comments; scripts), else and else-if blocks (a System "else" first condition), OR blocks (isOrBlock), function calls ({ callFunction, parameters: [...] }), script actions (lines, language "javascript"), comment rows and per-condition/per-action disabling. Unknown keys, in the arguments and at any depth, are refused, never dropped. Writes that would break a checked editor load-time rule (expression syntax, empty expressions, trigger placement) are refused.',
+      description: 'Set dryRun true to validate without writing. Add a block event (conditions + actions) to an event sheet, or inside a block/group/function using parentSid and optional parentEventPath. Written in the shapes the Construct 3 editor saves: sub-events (blocks, also without conditions, which run whenever their parent runs; comments; scripts), else and else-if blocks (a System "else" first condition), OR blocks (isOrBlock), function calls ({ callFunction, parameters: [...] }), script actions (lines, language "javascript"), comment rows and per-condition/per-action disabling. Unknown keys, in the arguments and at any depth, are refused, never dropped. Writes that would break a checked editor load-time rule (expression syntax, empty expressions, trigger placement) are refused.',
       inputSchema: z.object({
         dryRun: z.boolean().optional().default(false).describe('Validate on a copy without writing files, changing backups or reserving live IDs. A later apply revalidates; this does not prove gameplay.'),
         sheetName: z.string().max(200).describe('Target event sheet'),
@@ -456,13 +456,15 @@ export function registerEventTools({ server: mcpServer, reader, writer, idGen, k
         conditions: z.array(conditionSchema).optional().default([]).describe(EVENT_INPUT_DESCRIPTIONS.conditions),
         actions: z.array(actionSchema).optional().default([]).describe('Actions: plugin/behavior/System actions, function calls { callFunction, parameters: [...] }, script actions { type: "script", script } and comment rows { type: "comment", text, "text-color"?, "background-color"? }'),
         groupPath: z.string().max(500).optional().describe('Insert inside group by title path (e.g., "Movement > Collision"). Titles match exactly first, then ignoring leading/trailing whitespace when that fits one group'),
+        parentSid: z.number().int().positive().optional().describe('Insert as a child of this block, group or function SID; mutually exclusive with groupPath'),
+        parentEventPath: eventPathSchema.describe('Disambiguate parentSid with its exact event path, such as events[2].children[0]'),
         position: z.enum(['start', 'end']).optional().default('end').describe('Where to insert the event block'),
         disabled: z.boolean().optional().default(false).describe('Create the event block disabled'),
         isElse: z.boolean().optional().default(false).describe(EVENT_INPUT_DESCRIPTIONS.isElse),
         isOrBlock: z.boolean().optional().describe(EVENT_INPUT_DESCRIPTIONS.isOrBlock),
         children: z.array(childEventSchema).optional().default([]).describe('Sub-events nested inside this block (recursive, max depth 10, max 200 total events): blocks { conditions?, actions?, disabled?, isElse?, isOrBlock?, children? }, comments { eventType: "comment", text } and scripts { eventType: "script", script }. Other event types (variables, groups, functions, includes) and unknown keys are refused'),
       }, {
-        errorMap: unknownKeysErrorMap('the arguments of add_event_block', 'add_event_block takes dryRun, sheetName, eventType, conditions, actions, groupPath, position, disabled, isElse, isOrBlock and children; a "sid" is ignored. Comments, groups, variables, functions and includes are added with add_event_to_sheet.'),
+        errorMap: unknownKeysErrorMap('the arguments of add_event_block', 'add_event_block takes dryRun, sheetName, eventType, conditions, actions, groupPath, parentSid, parentEventPath, position, disabled, isElse, isOrBlock and children; a "sid" is ignored. Comments, groups, variables, functions and includes are added with add_event_to_sheet.'),
       }).strict(),
     },
     async (args) => {
@@ -487,8 +489,20 @@ export function registerEventTools({ server: mcpServer, reader, writer, idGen, k
           allRefs,
         );
 
-        // The block goes to the top level or into a group, never into a function block
-        const { errors, warnings } = await validateObjectClasses(reader, allRefs, { insideFunction: false });
+        if ((args.parentSid !== undefined && args.groupPath !== undefined) || (args.parentEventPath !== undefined && args.parentSid === undefined)) {
+          return toolError('Use either groupPath or parentSid (optionally with parentEventPath).');
+        }
+        const events = sheet.events as Record<string, unknown>[];
+        let parent: Record<string, unknown> | undefined;
+        let parentDepth = 0;
+        if (args.parentSid !== undefined) {
+          const found = resolveEventBySid(events, args.parentSid, { sheetName: args.sheetName, action: 'insert into', eventPath: args.parentEventPath });
+          if ('error' in found) return toolError(found.error);
+          parent = found.match.event;
+          parentDepth = parseEventPath(found.match.path)!.length;
+          if (!['block', 'group', 'function-block'].includes(String(parent.eventType))) return toolError('Parent must be a block, group or function-block.');
+        }
+        const { errors, warnings } = await validateObjectClasses(reader, allRefs, { insideFunction: parent ? isInFunctionBlock(events, parent) : false });
         if (errors.length > 0) {
           return toolError(`Object class validation failed:\n${errors.join('\n')}`);
         }
@@ -508,7 +522,7 @@ export function registerEventTools({ server: mcpServer, reader, writer, idGen, k
             isOrBlock: args.isOrBlock,
             children: args.children,
           },
-          1,
+          parentDepth + 1,
           counter,
         );
         warnings.push(...counter.warnings);
@@ -516,9 +530,10 @@ export function registerEventTools({ server: mcpServer, reader, writer, idGen, k
 
         // Determine target events array
         let targetEvents: Record<string, unknown>[];
-        const events = sheet.events as Record<string, unknown>[];
-
-        if (args.groupPath) {
+        if (parent) {
+          if (!Array.isArray(parent.children)) parent.children = [];
+          targetEvents = parent.children as Record<string, unknown>[];
+        } else if (args.groupPath) {
           const resolved = resolveGroupPath(events, args.groupPath);
           if (resolved.problem) {
             return toolError(describeGroupPathProblem(resolved.problem, args.groupPath, args.sheetName));
@@ -1407,6 +1422,7 @@ export function registerEventTools({ server: mcpServer, reader, writer, idGen, k
         sheetName: z.string().max(200).describe('Target event sheet'),
         sid: z.number().int().positive().describe('SID of the block event to update'),
         eventPath: eventPathSchema,
+        functionCopyPicked: z.boolean().optional().describe('Function blocks only: copy the caller picked instances on entry; preserves the signature and SIDs'),
         disabled: z.boolean().optional().describe('Enable or disable the entire block'),
         isElse: z.boolean().optional().describe('true: make the block an else block (puts the System "else" condition first; existing conditions then make an else-if). false: remove the leading "else" condition. Applied after all other condition changes.'),
         isOrBlock: z.boolean().optional().describe('true: make the block an OR block (its conditions are ORed); false: AND-combine them again'),
@@ -1434,13 +1450,14 @@ export function registerEventTools({ server: mcpServer, reader, writer, idGen, k
         removeActionIndices: z.array(z.number().int().min(0)).optional().describe('Remove actions by index (0-based, applied before adds)'),
         removeConditionIndices: z.array(z.number().int().min(0)).optional().describe('Remove conditions by index (0-based, applied before adds)'),
       }, {
-        errorMap: unknownKeysErrorMap('the arguments of update_event_block', 'update_event_block takes dryRun, sheetName, sid, eventPath, disabled, isElse, isOrBlock, updateActions, updateConditions, addActions, addConditions, removeActionIndices and removeConditionIndices. It does not add sub-events.'),
+        errorMap: unknownKeysErrorMap('the arguments of update_event_block', 'update_event_block takes dryRun, sheetName, sid, eventPath, functionCopyPicked, disabled, isElse, isOrBlock, updateActions, updateConditions, addActions, addConditions, removeActionIndices and removeConditionIndices. It does not add sub-events.'),
       }).strict(),
     },
     async (args) => {
       try {
         // Validate at least one update is provided
         const hasUpdate = args.disabled !== undefined
+          || args.functionCopyPicked !== undefined
           || args.isElse !== undefined
           || args.isOrBlock !== undefined
           || (args.updateActions && args.updateActions.length > 0)
@@ -1451,7 +1468,7 @@ export function registerEventTools({ server: mcpServer, reader, writer, idGen, k
           || (args.removeConditionIndices && args.removeConditionIndices.length > 0);
 
         if (!hasUpdate) {
-          return toolError('No updates provided. Specify at least one of: disabled, isElse, isOrBlock, updateActions, updateConditions, addActions, addConditions, removeActionIndices, removeConditionIndices.');
+          return toolError('No updates provided. Specify at least one of: functionCopyPicked, disabled, isElse, isOrBlock, updateActions, updateConditions, addActions, addConditions, removeActionIndices, removeConditionIndices.');
         }
 
         // Read the event sheet
@@ -1475,6 +1492,11 @@ export function registerEventTools({ server: mcpServer, reader, writer, idGen, k
 
         const { event, path } = found.match;
         const eventType = event.eventType as string;
+
+        if (args.functionCopyPicked !== undefined) {
+          if (eventType !== 'function-block') return toolError('functionCopyPicked applies to function blocks only.');
+          event.functionCopyPicked = args.functionCopyPicked;
+        }
 
         // Must be a block or function-block (not a group, variable, include, etc.)
         if (eventType !== 'block' && eventType !== 'function-block') {

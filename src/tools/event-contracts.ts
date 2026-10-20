@@ -11,6 +11,7 @@ interface ContractBlock {
   children?: readonly ContractBlock[];
 }
 
+/** Validates and canonicalizes checked input rows; callers pass their working copy, never a cached sheet. */
 export async function validateEventContracts(
   reader: Construct3ProjectReader,
   knowledge: KnowledgeBase,
@@ -112,8 +113,16 @@ export async function validateEventContracts(
             'functionname', 'animationframe', 'model3d-string', 'model3d-mesh-string', 'model3d-animation-string', 'tilemapbrush-string',
             'flowchart-string', 'objectinsttags'].includes(parameter.type)) {
             if (!(typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value)))) throw new Error(`Parameter "${parameter.id}" requires an expression string or finite number`);
+          } else if (parameter.type === 'audiofile') {
+            const ref = typeof value === 'string' ? { path: value } : value;
+            if (typeof ref !== 'object' || ref === null || Array.isArray(ref) || Object.keys(ref).length !== 1 ||
+                typeof (ref as Record<string, unknown>).path !== 'string' ||
+                /(^|[\\/])\.\.([\\/]|$)|^[\\/]|^[a-z]:|\0/i.test((ref as { path: string }).path)) {
+              throw new Error(`Parameter "${parameter.id}" requires an audiofile reference {path: soundName} (legacy strings are normalized)`);
+            }
+            values[parameter.id] = { path: (ref as { path: string }).path };
           } else if (['object', 'layout', 'instancevar', 'instancevarbool', 'eventvar', 'eventvarbool', 'eventvarany', 'function', 'projectfile',
-            'audiofile', 'timeline', 'ease', 'model3d', 'tilemapbrush', 'flowchart'].includes(parameter.type)) {
+            'timeline', 'ease', 'model3d', 'tilemapbrush', 'flowchart'].includes(parameter.type)) {
             if (typeof value !== 'string') throw new Error(`Parameter "${parameter.id}" requires a ${parameter.type} reference string`);
             if (parameter.type === 'object' && !families.has(value) && !(await reader.listObjectTypes()).includes(value)) throw new Error(`Unknown object reference "${value}"`);
             if (parameter.type === 'layout' && !(await reader.listLayouts()).includes(value)) throw new Error(`Unknown layout reference "${value}"`);

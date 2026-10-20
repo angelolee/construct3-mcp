@@ -9,6 +9,7 @@ export interface BuiltinPluginShape {
   tileCollisionPolys?: boolean;
   worldOrigin?: readonly [number, number] | 'property';
   fixedSize?: readonly [number, number];
+  propertyEnums?: Readonly<Record<string, readonly string[]>>;
 }
 
 // Plugin OnCreate overrides loaded world geometry; mirror the r495.2 initialization before writing new placements.
@@ -44,7 +45,11 @@ export const BUILTIN_PLUGIN_SHAPES: Readonly<Record<string, BuiltinPluginShape>>
   Function: { kind: 'singleton' },
   GameRecorder: { kind: 'singleton' },
   Geolocation: { kind: 'singleton' },
-  HTMLElement: { kind: 'world', worldOrigin: 'property' },
+  // Public r506 allEditorPlugins.js, SHA256 09bed99fd81e276fd5004962e3d04045715c5592e51b54c558539cb25a7bf94e.
+  HTMLElement: { kind: 'world', worldOrigin: 'property', propertyEnums: {
+    'stop-input-events': ['no', 'child-elements', 'entire-element'],
+    'content-type': ['html', 'bbcode', 'plain-text'],
+  } },
   InstantGames: { kind: 'singleton' },
   Internationalization: { kind: 'singleton' },
   Json: { kind: 'nonworld' },
@@ -95,4 +100,11 @@ export const BUILTIN_PLUGIN_SHAPES: Readonly<Record<string, BuiltinPluginShape>>
 
 export function builtinPluginShape(id: string): BuiltinPluginShape | undefined {
   return Object.hasOwn(BUILTIN_PLUGIN_SHAPES, id) ? BUILTIN_PLUGIN_SHAPES[id] : undefined;
+}
+
+/** Only known enum domains are checked; missing and unrelated properties retain their existing coverage. */
+export function builtinPropertyErrors(id: string, properties: Record<string, unknown>): string[] {
+  return Object.entries(builtinPluginShape(id)?.propertyEnums ?? {}).flatMap(([name, values]) =>
+    Object.hasOwn(properties, name) && !values.includes(properties[name] as string)
+      ? [`Plugin "${id}" property "${name}" requires one of: ${values.join(', ')}.`] : []);
 }

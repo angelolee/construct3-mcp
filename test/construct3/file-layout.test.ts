@@ -31,6 +31,10 @@ describe('Construct folder project file layout', () => {
     await cp(join(__dirname, '../fixtures/minimal-project'), dir, { recursive: true });
     await mkdir(join(dir, 'families'), { recursive: true });
     await writeFile(join(dir, 'families/Enemies.json'), JSON.stringify({ name: 'Enemies', 'plugin-id': 'Sprite', sid: 99, members: ['Sprite'] }));
+    const projectPath = join(dir, 'project.c3proj');
+    const project = JSON.parse(await readFile(projectPath, 'utf8'));
+    project.families.items = ['Enemies'];
+    await writeFile(projectPath, JSON.stringify(project));
     reader = new Construct3ProjectReader(join(dir, 'project.c3proj'));
     writer = new Construct3ProjectWriter(reader, new IdGenerator());
   });

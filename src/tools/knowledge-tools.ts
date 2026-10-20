@@ -6,7 +6,7 @@ import { RecipeCatalog } from '../knowledge/recipes.js';
 
 export function registerKnowledgeTools(server: McpServer, knowledge: KnowledgeBase) {
   const recipes = new RecipeCatalog(knowledge);
-  const limit = z.number().int().min(1).max(10).optional().default(5);
+  const limit = z.number().int().min(1).max(10).optional().default(5).describe('Maximum results: integer 1–10; default 5');
   const run = (operation: string) => async (args: Record<string, unknown>) => {
     try { return toolResult(await knowledge.query({ operation, ...args })); }
     catch (error) { return toolError(error instanceof Error ? error.message : String(error)); }

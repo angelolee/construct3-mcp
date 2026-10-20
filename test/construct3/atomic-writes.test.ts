@@ -150,7 +150,7 @@ describe('Construct3ProjectWriter — file names on disk (issue #29)', () => {
 
   it('createOnly writes a new file', async () => {
     await writer.writeEntityFile('layouts', 'Layout 2', { name: 'Layout 2', layers: [] }, undefined, { createOnly: true });
-    expect((await readdir(layoutsDir())).sort()).toEqual(['Layout 1.json', 'layout 2.json']);
+    expect((await readdir(layoutsDir())).sort()).toEqual(['Layout 1.json', 'Layout 2.json']);
   });
 
   describe.skipIf(!caseInsensitive)('on a case-insensitive file system', () => {
